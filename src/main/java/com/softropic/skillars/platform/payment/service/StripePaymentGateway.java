@@ -350,20 +350,21 @@ public class StripePaymentGateway implements PaymentGateway {
         }
     }
 
-    /** How long after a charge an empty key search is trusted as "never charged" (Stripe Search lags about a minute). */
-    static final java.time.Duration SEARCH_SETTLE = java.time.Duration.ofHours(1);
-
     private Optional<ChargeLookup> searchChargeByKey(Long parentId, String idempotencyKey, Instant createdAfter,
                                                      StripeException listFailure) {
         log.warn("[STRIPE_CHARGE_LOOKUP_SEARCH_FALLBACK] customer-scoped list failed permanently, searching by key: "
             + "parentId={} key={} error={}", parentId, idempotencyKey, listFailure.getMessage());
         try {
+            // Same window as the list (created at or after createdAfter), newest first like the list, so a key re-sent past
+            // Stripe's 24-hour idempotency window resolves to its latest PaymentIntent (review round 2).
             Optional<ChargeLookup> found = stripeClient.searchPaymentIntentsByMetadata(CHARGE_KEY_METADATA, idempotencyKey).stream()
                 .filter(pi -> pi.getMetadata() != null && idempotencyKey.equals(pi.getMetadata().get(CHARGE_KEY_METADATA)))
-                .findFirst().map(StripePaymentGateway::toLookup);
-            // Review round 1: Search is eventually consistent, so an empty result proves absence only for a charge old enough
-            // to have been indexed; a younger one stays a lookup failure and is asked again later.
-            if (found.isEmpty() && createdAfter.isAfter(Instant.now().minus(SEARCH_SETTLE))) {
+                .filter(pi -> pi.getCreated() == null || pi.getCreated() >= createdAfter.getEpochSecond())
+                .max(java.util.Comparator.comparing(pi -> pi.getCreated() == null ? 0L : pi.getCreated()))
+                .map(StripePaymentGateway::toLookup);
+            if (found.isEmpty()) {
+                // Review round 2: Search is eventually consistent and may be unavailable, so its empty answer is never a
+                // proven absence (the pack resolver and the booking reconciler both act on one). The fallback only finds.
                 throw new PaymentGatewayException("payment.chargeLookupFailed");
             }
             return found;

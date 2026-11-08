@@ -914,7 +914,7 @@ class SessionPackPaymentServiceTest {
 
     /** skillars-deferred-178 (RS06f): a request that resumes after the resolver closed its attempt does not charge. */
     @Test
-    void purchasePack_attemptClosedByTheResolverBeforeTheCharge_isNotCharged_andRevertsTheCardItWrote() {
+    void purchasePack_attemptClosedByTheResolverBeforeTheCardWrite_writesNoCard_andIsNotCharged() {
         stubPurchaseWithExistingCustomer(makeActiveTier(), "pm_old");
         when(attemptRepository.existsByIdAndStatusNot(1L,
             com.softropic.skillars.platform.payment.repo.SessionPackPurchaseAttempt.Status.IN_PROGRESS)).thenReturn(true);
@@ -923,7 +923,22 @@ class SessionPackPaymentServiceTest {
             .isInstanceOf(com.softropic.skillars.platform.payment.contract.exception.PackNoChargeException.class);
 
         verify(paymentGateway, never()).chargeAndCapture(any(), any(), any(), any(), any(), any());
-        // review round 1: the resolver's revert ran before this request wrote the card, so this request reverts it
+        // review round 2: a later purchase may own the card by now, so a stale request neither writes nor reverts one
+        verify(stripeCustomerCardWrites, never()).writeCardIfPayerLive(any(), any());
+        verify(stripeCustomerRepository, never()).revertPaymentMethod(any(), any(), any());
+    }
+
+    @Test
+    void purchasePack_attemptClosedBetweenTheCardWriteAndTheCharge_revertsTheCardItWrote() {
+        stubPurchaseWithExistingCustomer(makeActiveTier(), "pm_old");
+        when(attemptRepository.existsByIdAndStatusNot(1L,
+            com.softropic.skillars.platform.payment.repo.SessionPackPurchaseAttempt.Status.IN_PROGRESS))
+            .thenReturn(false).thenReturn(true);
+
+        assertThatThrownBy(() -> sessionPackPaymentService.purchasePack(PARENT_ID, TIER_ID, PLAYER_ID, "pm_new", KEY))
+            .isInstanceOf(com.softropic.skillars.platform.payment.contract.exception.PackNoChargeException.class);
+
+        verify(paymentGateway, never()).chargeAndCapture(any(), any(), any(), any(), any(), any());
         verify(stripeCustomerRepository).revertPaymentMethod(PARENT_ID, "pm_old", "pm_new");
     }
 
@@ -1017,10 +1032,9 @@ class SessionPackPaymentServiceTest {
             .thenThrow(new com.softropic.skillars.platform.payment.contract.exception.ChargeOutcomeUnknownException("pack-key", null));
         when(attemptRepository.transition(any(), eq(com.softropic.skillars.platform.payment.repo.SessionPackPurchaseAttempt.Status.UNKNOWN),
             any(), any())).thenReturn(false);
-        when(attemptRepository.existsByIdAndStatusNot(1L,
-            com.softropic.skillars.platform.payment.repo.SessionPackPurchaseAttempt.Status.IN_PROGRESS))
-            .thenReturn(false)   // the pre-charge re-read: still in progress
-            .thenReturn(true);   // after the charge: the resolver wrote NO_CHARGE meanwhile
+        // after the charge: the resolver wrote NO_CHARGE meanwhile (review round 2: only NO_CHARGE raises it)
+        when(attemptRepository.existsByIdAndStatus(1L,
+            com.softropic.skillars.platform.payment.repo.SessionPackPurchaseAttempt.Status.NO_CHARGE)).thenReturn(true);
 
         ch.qos.logback.classic.Logger logger = (ch.qos.logback.classic.Logger) org.slf4j.LoggerFactory.getLogger(SessionPackPaymentService.class);
         ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent> logs = new ch.qos.logback.core.read.ListAppender<>();

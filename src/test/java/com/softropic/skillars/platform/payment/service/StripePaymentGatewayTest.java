@@ -1151,19 +1151,41 @@ class StripePaymentGatewayTest {
     }
 
     @Test
-    void findChargeByIdempotencyKey_searchFallbackEmpty_provesAbsenceOnlyOnceSettled() throws StripeException {
+    void findChargeByIdempotencyKey_searchFallbackEmpty_isNeverAProvenAbsence() throws StripeException {
         stubStripeCustomer(1001L, "cus_deleted");
         when(stripeClient.listPaymentIntentsForCustomer(org.mockito.ArgumentMatchers.eq("cus_deleted"),
                 org.mockito.ArgumentMatchers.anyLong()))
             .thenThrow(new com.stripe.exception.InvalidRequestException("No such customer", "customer", "req", "resource_missing", 404, null));
         when(stripeClient.searchPaymentIntentsByMetadata("chargeKey", "pack-k")).thenReturn(java.util.List.of());
 
-        // too recent for the eventually consistent search: no verdict
-        org.assertj.core.api.Assertions.assertThatThrownBy(() ->
-                stripePaymentGateway.findChargeByIdempotencyKey(1001L, "pack-k", Instant.now().minusSeconds(600)))
-            .isInstanceOf(PaymentGatewayException.class).hasMessage("payment.chargeLookupFailed");
-        // past the settle window: a proven absence
-        assertThat(stripePaymentGateway.findChargeByIdempotencyKey(1001L, "pack-k", Instant.now().minusSeconds(7200))).isEmpty();
+        // review round 2: Search is eventually consistent, so "not found" there decides nothing, however old the charge
+        for (long ageSeconds : new long[] {600, 7200, 86_400 * 7}) {
+            org.assertj.core.api.Assertions.assertThatThrownBy(() ->
+                    stripePaymentGateway.findChargeByIdempotencyKey(1001L, "pack-k", Instant.now().minusSeconds(ageSeconds)))
+                .isInstanceOf(PaymentGatewayException.class).hasMessage("payment.chargeLookupFailed");
+        }
+    }
+
+    @Test
+    void findChargeByIdempotencyKey_searchFallback_takesTheNewestInTheWindow() throws StripeException {
+        stubStripeCustomer(1001L, "cus_deleted");
+        when(stripeClient.listPaymentIntentsForCustomer(org.mockito.ArgumentMatchers.eq("cus_deleted"),
+                org.mockito.ArgumentMatchers.anyLong()))
+            .thenThrow(new com.stripe.exception.InvalidRequestException("No such customer", "customer", "req", "resource_missing", 404, null));
+        long after = Instant.now().minusSeconds(3600).getEpochSecond();
+        PaymentIntent tooOld = mockIntent("pi_old");
+        tooOld.setMetadata(Map.of("chargeKey", "k"));
+        tooOld.setCreated(after - 10);
+        PaymentIntent older = mockIntent("pi_older");
+        older.setMetadata(Map.of("chargeKey", "k"));
+        older.setCreated(after + 10);
+        PaymentIntent newest = mockIntent("pi_newest");
+        newest.setMetadata(Map.of("chargeKey", "k"));
+        newest.setCreated(after + 20);
+        when(stripeClient.searchPaymentIntentsByMetadata("chargeKey", "k")).thenReturn(java.util.List.of(tooOld, newest, older));
+
+        assertThat(stripePaymentGateway.findChargeByIdempotencyKey(1001L, "k", Instant.ofEpochSecond(after)))
+            .get().extracting(com.softropic.skillars.platform.payment.contract.ChargeLookup::paymentIntentId).isEqualTo("pi_newest");
     }
 
     @Test

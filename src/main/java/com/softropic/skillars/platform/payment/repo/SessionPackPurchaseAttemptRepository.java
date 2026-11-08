@@ -85,4 +85,7 @@ public interface SessionPackPurchaseAttemptRepository extends JpaRepository<Sess
      * a thread that resumes after that must not charge.
      */
     boolean existsByIdAndStatusNot(Long id, SessionPackPurchaseAttempt.Status status);
+
+    /** skillars-deferred-178 (review round 2): the late-capture alert fires only for an attempt the resolver judged uncharged. */
+    boolean existsByIdAndStatus(Long id, SessionPackPurchaseAttempt.Status status);
 }

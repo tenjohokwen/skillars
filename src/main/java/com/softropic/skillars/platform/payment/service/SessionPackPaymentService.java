@@ -221,6 +221,11 @@ public class SessionPackPaymentService {
         // 5. card write, then the charge. Scoped by parentId so two payers can never share a key, whatever the client sends.
         String idempotencyKey = stripeKey(parentId, key);
         String paymentIntentId;
+        // skillars-deferred-178 (review round 2): checked before the card write too, so a request that resumes after the
+        // resolver closed its attempt never writes, or reverts, a card (a later purchase of this parent may own it by now).
+        if (attemptRepository.existsByIdAndStatusNot(attempt.getId(), Status.IN_PROGRESS)) {
+            throw closedBeforeCharge(attempt, parentId);
+        }
         try {
             getOrCreateStripeCustomer(parentId, paymentMethodId);
         } catch (RuntimeException e) {
@@ -236,15 +241,14 @@ public class SessionPackPaymentService {
         // skillars-deferred-178 (RS06f): a thread that stalled past the absence age finds its attempt already closed by the
         // resolver (NO_CHARGE), and the parent may have started another purchase since: it must not charge now.
         if (attemptRepository.existsByIdAndStatusNot(attempt.getId(), Status.IN_PROGRESS)) {
-            log.error("[PACK_PURCHASE_ATTEMPT_CLOSED_BEFORE_CHARGE] attemptId={} parentId={} — the resolver closed it while "
-                + "this request stalled; not charged", attempt.getId(), parentId);
-            // Review round 1: the resolver's own revert ran before this request wrote the named card, so it reverted nothing.
+            // Review round 1: closed between the card write and here, so the resolver's own revert ran before this request
+            // wrote the named card and reverted nothing.
             try {
                 revertDeclinedCard(attempt);
             } catch (RuntimeException e) {
                 log.error("[PACK_PURCHASE_CARD_REVERT_FAILED] attemptId={} parentId={}", attempt.getId(), parentId, e);
             }
-            throw new PackNoChargeException(null);
+            throw closedBeforeCharge(attempt, parentId);
         }
         try {
             // skillars-deferred-174 AC3 (RS09d): charge the card this request named, not whatever the saved-card column
@@ -682,20 +686,34 @@ public class SessionPackPaymentService {
      * recorded and paid for, but the parent, told nothing was charged, may have bought again: an alert source
      * (MoneyIntegrityEvent), so an operator checks for a second pack and offers a refund.
      */
+    private static PackNoChargeException closedBeforeCharge(SessionPackPurchaseAttempt attempt, Long parentId) {
+        log.error("[PACK_PURCHASE_ATTEMPT_CLOSED_BEFORE_CHARGE] attemptId={} parentId={} — the resolver closed it while this "
+            + "request stalled; not charged", attempt.getId(), parentId);
+        return new PackNoChargeException(null);
+    }
+
     private static void lateCapture(Long attemptId, Long parentId, String paymentIntentId) {
         log.error("[PACK_PURCHASE_LATE_CAPTURE] attemptId={} parentId={} intentId={} — captured after the attempt was judged "
             + "uncharged; check the parent for a second pack bought meanwhile", attemptId, parentId, paymentIntentId);
     }
 
     /**
-     * After a charge whose outcome is unknown. skillars-deferred-178 (review round 1): when the attempt already left IN_PROGRESS
-     * (the resolver judged it uncharged while this request stalled), the row stays closed and nothing revisits it, so a capture
+     * After a charge whose outcome is unknown. skillars-deferred-178 (review round 1): when the resolver already judged the
+     * attempt uncharged (NO_CHARGE) while this request stalled, the row stays closed and nothing revisits it, so a capture
      * Stripe may have made would go unseen: raise the late-capture alert for an operator to check.
      */
     private void markOpen(SessionPackPurchaseAttempt a, Status to) {
-        if (!markQuietly(a, to, null, Set.of(Status.IN_PROGRESS))
-                && attemptRepository.existsByIdAndStatusNot(a.getId(), Status.IN_PROGRESS)) {
-            lateCapture(a.getId(), a.getParentId(), "unknown (charge outcome unknown)");
+        if (markQuietly(a, to, null, Set.of(Status.IN_PROGRESS))) {
+            return;
+        }
+        try {
+            // Review round 2: only NO_CHARGE; the resolver may also have moved it to UNKNOWN or SUCCEEDED, which is tracked.
+            if (attemptRepository.existsByIdAndStatus(a.getId(), Status.NO_CHARGE)) {
+                lateCapture(a.getId(), a.getParentId(), "unknown (charge outcome unknown)");
+            }
+        } catch (RuntimeException e) {
+            // Never replaces the charge's own exception, which the caller is about to rethrow.
+            log.error("[PACK_PURCHASE_CAS_LOST] could not re-read the attempt after an unknown outcome: attemptId={}", a.getId(), e);
         }
     }
 

@@ -68,7 +68,8 @@ meanwhile answers the request, as a later retry would be answered.
 2. **AC2 (RS06g, D18.1)** `getCaptureState` of a PaymentIntent without a readable charge but with `amount_received` reports
    captured = amount received and refunded = its succeeded refunds; unreadable only when nothing was received.
 3. **AC3 (RS06h, D19.1)** `findChargeByIdempotencyKey` falls back to the key search on a permanent list failure only; a
-   transient failure stays a lookup failure.
+   transient failure stays a lookup failure. The search only finds (newest match in the window); an empty search is a
+   lookup failure, never a proven absence (residual RS06l).
 4. **AC4 (RS06j, D20.1)** A same-key request refused by the ownership check is answered from a same-key attempt that exists by
    then.
 5. **AC5** Docs: monitoring.md (MoneyIntegrityEvent, PackAttemptsUnresolved), provisioning checklist changelog, payment dev
@@ -109,3 +110,8 @@ Claude Opus 5.5 (claude-opus-5-5)
   reviewers); a pending refund keeps the capture state unreadable instead of reading as captured (general, medium); a
   failing refund page is a lookup failure (general); an empty key search proves absence only for a charge past
   `SEARCH_SETTLE` (1 h), since Search is eventually consistent (both reviewers).
+- 2026-11-08: `/pr-review` round 2 (bc23a17b): an empty key search is never a proven absence (general: the booking
+  reconciler shares the lookup and would decline a captured booking; the settle window is withdrawn), and the search takes
+  the newest match created in the lookup window; the late-capture alert after an unknown outcome fires only on NO_CHARGE
+  (both reviewers); its status read is guarded; the closed-by-the-resolver check also runs before the card write, so a stale
+  request never writes or reverts a card a later purchase may own (general). RS06l filed.
