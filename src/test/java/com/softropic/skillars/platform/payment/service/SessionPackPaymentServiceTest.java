@@ -887,6 +887,44 @@ class SessionPackPaymentServiceTest {
         verify(paymentGateway, never()).chargeAndCapture(any(), any(), any(), any(), any(), any());
     }
 
+    /** skillars-deferred-178 (RS06j): a same-key request that lost the insert race is answered from the winner, not 400. */
+    @Test
+    void purchasePack_ownershipRefusedButASameKeyAttemptAppeared_isAnsweredFromThatAttempt() {
+        PlayerProfile player = new PlayerProfile();
+        player.setId(PLAYER_ID);
+        player.setUserId(PARENT_ID);
+        when(playerProfileRepository.findById(PLAYER_ID)).thenReturn(Optional.of(player));
+        when(sessionPackTierRepository.findById(TIER_ID)).thenReturn(Optional.of(makeActiveTier()));
+        when(stripeCustomerRepository.findById(PARENT_ID)).thenReturn(Optional.of(existingCustomerWithCard("pm_old")));
+        when(paymentGateway.paymentMethodBelongsTo("cus_test", "pm_new")).thenReturn(false);
+        com.softropic.skillars.platform.payment.repo.SessionPackPurchaseAttempt winner =
+            new com.softropic.skillars.platform.payment.repo.SessionPackPurchaseAttempt(
+                PARENT_ID, KEY, TIER_ID, PLAYER_ID, "pm_old", "pm_new", true);
+        winner.setStatus(com.softropic.skillars.platform.payment.repo.SessionPackPurchaseAttempt.Status.NO_CHARGE);
+        when(attemptRepository.findByParentIdAndAttemptKey(PARENT_ID, KEY))
+            .thenReturn(Optional.empty())       // the replay check: the winner had not inserted yet
+            .thenReturn(Optional.of(winner));   // after the refusal: it has
+
+        assertThatThrownBy(() -> sessionPackPaymentService.purchasePack(PARENT_ID, TIER_ID, PLAYER_ID, "pm_new", KEY))
+            .isInstanceOf(com.softropic.skillars.platform.payment.contract.exception.PackNoChargeException.class);
+
+        verify(attemptRepository, never()).saveAndFlush(any());
+        verify(paymentGateway, never()).chargeAndCapture(any(), any(), any(), any(), any(), any());
+    }
+
+    /** skillars-deferred-178 (RS06f): a request that resumes after the resolver closed its attempt does not charge. */
+    @Test
+    void purchasePack_attemptClosedByTheResolverBeforeTheCharge_isNotCharged() {
+        stubPurchaseWithExistingCustomer(makeActiveTier(), "pm_old");
+        when(attemptRepository.existsByIdAndStatusNot(1L,
+            com.softropic.skillars.platform.payment.repo.SessionPackPurchaseAttempt.Status.IN_PROGRESS)).thenReturn(true);
+
+        assertThatThrownBy(() -> sessionPackPaymentService.purchasePack(PARENT_ID, TIER_ID, PLAYER_ID, null, KEY))
+            .isInstanceOf(com.softropic.skillars.platform.payment.contract.exception.PackNoChargeException.class);
+
+        verify(paymentGateway, never()).chargeAndCapture(any(), any(), any(), any(), any(), any());
+    }
+
     @Test
     void purchasePack_aNamedCardWithoutAStripeCustomer_isRefused_noCustomerIsCreated() {
         PlayerProfile player = new PlayerProfile();

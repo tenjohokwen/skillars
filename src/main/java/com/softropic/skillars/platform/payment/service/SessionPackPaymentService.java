@@ -184,7 +184,19 @@ public class SessionPackPaymentService {
         // skillars-deferred-174 AC1 (RS09b): a named card must be attached to this payer's own Stripe customer, checked
         // before any row is written. A payer without a customer cannot own it (a fresh customer has no cards).
         if (paymentMethodId != null && !paymentMethodId.isBlank()) {
-            requireOwnedPaymentMethod(parentId, customerBefore.orElse(null), paymentMethodId);
+            try {
+                requireOwnedPaymentMethod(parentId, customerBefore.orElse(null), paymentMethodId);
+            } catch (RuntimeException e) {
+                // skillars-deferred-178 (RS06j): a same-key request that raced this one may have inserted the attempt since
+                // the replay check above; it is answered from that attempt, as a later retry would be.
+                if (attemptKey != null) {
+                    Optional<SessionPackPurchaseAttempt> winner = attemptRepository.findByParentIdAndAttemptKey(parentId, attemptKey);
+                    if (winner.isPresent()) {
+                        return answerKnownAttempt(winner.get(), parentId, packTierId, playerId);
+                    }
+                }
+                throw e;
+            }
         }
         String key = attemptKey != null ? attemptKey : UUID.randomUUID().toString();
         if (attemptKey == null) {
@@ -220,6 +232,13 @@ public class SessionPackPaymentService {
                 attemptRepository.nullCardsForParent(parentId);
             }
             throw e instanceof PaymentGatewayException ? new PackNoChargeException(e) : e;
+        }
+        // skillars-deferred-178 (RS06f): a thread that stalled past the absence age finds its attempt already closed by the
+        // resolver (NO_CHARGE), and the parent may have started another purchase since: it must not charge now.
+        if (attemptRepository.existsByIdAndStatusNot(attempt.getId(), Status.IN_PROGRESS)) {
+            log.error("[PACK_PURCHASE_ATTEMPT_CLOSED_BEFORE_CHARGE] attemptId={} parentId={} — the resolver closed it while "
+                + "this request stalled; not charged", attempt.getId(), parentId);
+            throw new PackNoChargeException(null);
         }
         try {
             // skillars-deferred-174 AC3 (RS09d): charge the card this request named, not whatever the saved-card column
@@ -566,6 +585,7 @@ public class SessionPackPaymentService {
         }
         if (a.getStatus() == Status.NO_CHARGE) {
             log.error("[PACK_PURCHASE_CAS_LOST] key=NO_CHARGE_TO_SUCCEEDED attemptId={}", a.getId());
+            lateCapture(a.getId(), a.getParentId(), paymentIntentId);
         }
         return Resolution.closed(Status.SUCCEEDED, pack);
     }
@@ -642,12 +662,23 @@ public class SessionPackPaymentService {
             if (attemptRepository.transition(a.getId(), Status.SUCCEEDED, paymentIntentId, Set.of(Status.NO_CHARGE))) {
                 log.error("[PACK_PURCHASE_CAS_LOST] key=NO_CHARGE_TO_SUCCEEDED attemptId={} intentId={} — the resolver had "
                     + "judged this attempt uncharged", a.getId(), paymentIntentId);
+                lateCapture(a.getId(), a.getParentId(), paymentIntentId);
                 return;
             }
             log.warn("[PACK_PURCHASE_CAS_LOST] key=transition attemptId={} wanted={}", a.getId(), Status.SUCCEEDED);
         } catch (RuntimeException e) {
             log.error("[PACK_PURCHASE_CAS_LOST] status write failed: attemptId={} wanted={}", a.getId(), Status.SUCCEEDED, e);
         }
+    }
+
+    /**
+     * skillars-deferred-178 (RS06f): a capture landed on an attempt the resolver had closed as NO_CHARGE. The pack is
+     * recorded and paid for, but the parent, told nothing was charged, may have bought again: an alert source
+     * (MoneyIntegrityEvent), so an operator checks for a second pack and offers a refund.
+     */
+    private static void lateCapture(Long attemptId, Long parentId, String paymentIntentId) {
+        log.error("[PACK_PURCHASE_LATE_CAPTURE] attemptId={} parentId={} intentId={} — captured after the attempt was judged "
+            + "uncharged; check the parent for a second pack bought meanwhile", attemptId, parentId, paymentIntentId);
     }
 
     private void markOpen(SessionPackPurchaseAttempt a, Status to) {

@@ -335,9 +335,30 @@ public class StripePaymentGateway implements PaymentGateway {
                 }
             }
             return Optional.empty();
-        } catch (StripeException | RuntimeException e) {
+        } catch (StripeException e) {
+            if (isPermanentLookupFailure(e)) {
+                // skillars-deferred-178 (RS06h): the customer-scoped list can never succeed again (the customer was deleted
+                // at Stripe); search by the charge key, which does not go through the customer.
+                return searchChargeByKey(parentId, idempotencyKey, e);
+            }
+            log.error("Stripe charge lookup failed: parentId={} key={} error={}", parentId, idempotencyKey, e.getMessage());
+            throw new PaymentGatewayException("payment.chargeLookupFailed", e);
+        } catch (RuntimeException e) {
             // RuntimeException: auto-paging wraps a mid-pagination StripeException in an unchecked one.
             log.error("Stripe charge lookup failed: parentId={} key={} error={}", parentId, idempotencyKey, e.getMessage());
+            throw new PaymentGatewayException("payment.chargeLookupFailed", e);
+        }
+    }
+
+    private Optional<ChargeLookup> searchChargeByKey(Long parentId, String idempotencyKey, StripeException listFailure) {
+        log.warn("[STRIPE_CHARGE_LOOKUP_SEARCH_FALLBACK] customer-scoped list failed permanently, searching by key: "
+            + "parentId={} key={} error={}", parentId, idempotencyKey, listFailure.getMessage());
+        try {
+            return stripeClient.searchPaymentIntentsByMetadata(CHARGE_KEY_METADATA, idempotencyKey).stream()
+                .filter(pi -> pi.getMetadata() != null && idempotencyKey.equals(pi.getMetadata().get(CHARGE_KEY_METADATA)))
+                .findFirst().map(StripePaymentGateway::toLookup);
+        } catch (StripeException | RuntimeException e) {
+            log.error("Stripe charge search failed: parentId={} key={} error={}", parentId, idempotencyKey, e.getMessage());
             throw new PaymentGatewayException("payment.chargeLookupFailed", e);
         }
     }
@@ -591,10 +612,10 @@ public class StripePaymentGateway implements PaymentGateway {
     @Override
     public CaptureState getCaptureState(String stripePaymentIntentId) {
         try {
-            Charge charge = stripeClient.retrievePaymentIntentWithLatestCharge(stripePaymentIntentId)
-                .getLatestChargeObject();
+            PaymentIntent pi = stripeClient.retrievePaymentIntentWithLatestCharge(stripePaymentIntentId);
+            Charge charge = pi.getLatestChargeObject();
             if (charge == null) {
-                return new CaptureState(null, BigDecimal.ZERO);
+                return captureStateFromRefunds(pi);
             }
             long captured = charge.getAmountCaptured() == null ? 0L : charge.getAmountCaptured();
             long refunded = charge.getAmountRefunded() == null ? 0L : charge.getAmountRefunded();
@@ -604,6 +625,24 @@ public class StripePaymentGateway implements PaymentGateway {
             throw new PaymentGatewayException(isPermanentLookupFailure(e)
                 ? PaymentGateway.REFUND_TARGET_INVALID : "payment.refundLookupFailed");
         }
+    }
+
+    /**
+     * skillars-deferred-178 (RS06g): a PaymentIntent with no readable latest charge. Its {@code amount_received} and its
+     * succeeded refunds (listed by PaymentIntent, not through the charge) still tell captured from refunded, so an operator's
+     * refund in the Stripe dashboard closes the attempt. Unreadable only when Stripe reports nothing received.
+     */
+    private CaptureState captureStateFromRefunds(PaymentIntent pi) throws StripeException {
+        Long received = pi.getAmountReceived();
+        if (received == null || received <= 0L) {
+            return new CaptureState(null, BigDecimal.ZERO);
+        }
+        long refunded = stripeClient.listRefundsForPaymentIntent(pi.getId()).stream()
+            .filter(r -> "succeeded".equals(r.getStatus()) && r.getAmount() != null)
+            .mapToLong(com.stripe.model.Refund::getAmount).sum();
+        log.warn("[STRIPE_CAPTURE_STATE_FROM_REFUNDS] intentId={} received={} refunded={} (no readable charge object)",
+            pi.getId(), received, refunded);
+        return new CaptureState(BigDecimal.valueOf(received, 2), BigDecimal.valueOf(refunded, 2));
     }
 
     @Override

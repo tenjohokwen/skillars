@@ -85,6 +85,25 @@ public class StripeClient {
         return PaymentIntent.list(params).autoPagingIterable();
     }
 
+    /**
+     * skillars-deferred-178 (RS06h): PaymentIntents whose metadata {@code key} equals {@code value}, across all customers.
+     * Search is eventually consistent (about a minute behind), so it is only a fallback for an old attempt whose
+     * customer-scoped {@link #listPaymentIntentsForCustomer} can no longer succeed (the customer was deleted at Stripe).
+     */
+    public java.util.List<PaymentIntent> searchPaymentIntentsByMetadata(String key, String value) throws StripeException {
+        String quoted = value.replace("\\", "\\\\").replace("'", "\\'");
+        return PaymentIntent.search(com.stripe.param.PaymentIntentSearchParams.builder()
+            .setQuery("metadata['" + key + "']:'" + quoted + "'").setLimit(10L).build()).getData();
+    }
+
+    /** skillars-deferred-178 (RS06g): every refund of a PaymentIntent, auto-paged, for one whose charge object is unreadable. */
+    public java.util.List<Refund> listRefundsForPaymentIntent(String paymentIntentId) throws StripeException {
+        java.util.List<Refund> all = new java.util.ArrayList<>();
+        Refund.list(com.stripe.param.RefundListParams.builder().setPaymentIntent(paymentIntentId).setLimit(100L).build())
+            .autoPagingIterable().forEach(all::add);
+        return all;
+    }
+
     /** One round-trip: the PaymentIntent with its latest Charge expanded (refundable-amount check). */
     public PaymentIntent retrievePaymentIntentWithLatestCharge(String id) throws StripeException {
         PaymentIntentRetrieveParams params = PaymentIntentRetrieveParams.builder()
