@@ -59,6 +59,7 @@ class SessionPackPaymentServiceTest {
     @Mock SubscriptionService subscriptionService;
     @Mock StripeCustomerEmailSyncOutboxSupport stripeCustomerEmailSync;
     @Mock StripeCustomerCardWrites stripeCustomerCardWrites;
+    @Mock StripeCustomerErasureOutboxSupport stripeCustomerErasureOutboxSupport;
     @Mock com.softropic.skillars.platform.security.service.AgeVerificationService ageVerificationService;
     @Mock com.softropic.skillars.platform.payment.repo.SessionPackPurchaseAttemptRepository attemptRepository;
     @Mock com.softropic.skillars.platform.payment.repo.StripeRefundFailureRepository refundFailureRepository;
@@ -801,6 +802,25 @@ class SessionPackPaymentServiceTest {
         when(stripeCustomerCardWrites.payerLive(PARENT_ID)).thenReturn(false);
 
         assertRefusedAsErased(null);
+    }
+
+    /** skillars-deferred-177 (review round 3): the customer of a lost first-creation race is erased at Stripe. */
+    @Test
+    void purchasePack_losingTheFirstCreationRace_erasesTheUnrecordedStripeCustomer_noCharge() {
+        PlayerProfile player = new PlayerProfile();
+        player.setId(PLAYER_ID);
+        player.setUserId(PARENT_ID);
+        when(playerProfileRepository.findById(PLAYER_ID)).thenReturn(Optional.of(player));
+        when(sessionPackTierRepository.findById(TIER_ID)).thenReturn(Optional.of(makeActiveTier()));
+        when(stripeCustomerRepository.findById(PARENT_ID)).thenReturn(Optional.empty());
+        when(paymentGateway.createStripeCustomer(PARENT_ID)).thenReturn("cus_loser");
+        when(stripeCustomerRepository.save(any())).thenThrow(new org.springframework.dao.DataIntegrityViolationException("dup"));
+
+        assertThatThrownBy(() -> sessionPackPaymentService.purchasePack(PARENT_ID, TIER_ID, PLAYER_ID, null, KEY))
+            .isInstanceOf(org.springframework.dao.DataIntegrityViolationException.class);
+
+        verify(stripeCustomerErasureOutboxSupport).scheduleOrphanErasure("cus_loser");
+        verify(paymentGateway, never()).chargeAndCapture(any(), any(), any(), any(), anyString(), any());
     }
 
     @Test

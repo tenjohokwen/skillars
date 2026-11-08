@@ -192,7 +192,9 @@ public class SessionPackPaymentResource {
                 try {
                     saved = stripeCustomerRepository.save(sc);
                 } catch (DataIntegrityViolationException e) {
-                    // A concurrent first request saved the row; it is an existing customer now (177 review round 1).
+                    // A concurrent first request saved the row; it is an existing customer now (177 review round 1), and the
+                    // customer this request created is named by no row, so it is erased at Stripe (review round 3).
+                    sessionPackPaymentService.discardUnrecordedCustomer(stripeCustomerId);
                     sessionPackPaymentService.requirePayerLive(parentId);
                     return stripeCustomerRepository.findById(parentId).orElseThrow();
                 }

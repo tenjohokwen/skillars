@@ -72,4 +72,13 @@ class StripeCustomerErasureOutboxSupportTest {
 
         org.mockito.Mockito.verify(packAttemptRepository).nullCardsForParent(9L);
     }
+
+    // skillars-deferred-177 (review round 3)
+    @Test
+    void anOrphanCustomer_isEnqueuedByItsIdAlone() {
+        support().scheduleOrphanErasure("cus_orphan");
+
+        verify(outboxService).enqueue(StripeCustomerErasureOutboxSupport.AGGREGATE_TYPE, "{\"stripeCustomerId\":\"cus_orphan\"}");
+        verify(outboxService).requestDrainAfterCommit();
+    }
 }

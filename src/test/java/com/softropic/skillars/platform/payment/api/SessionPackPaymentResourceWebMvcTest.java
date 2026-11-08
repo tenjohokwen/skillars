@@ -279,6 +279,8 @@ class SessionPackPaymentResourceWebMvcTest {
             .andExpect(status().isUnprocessableEntity());
 
         org.mockito.Mockito.verify(paymentGateway, org.mockito.Mockito.never()).createSetupIntent(org.mockito.ArgumentMatchers.any());
+        // review round 3: the loser's own Stripe customer is named by no row, so it is erased at Stripe
+        org.mockito.Mockito.verify(sessionPackPaymentService).discardUnrecordedCustomer("cus_loser");
     }
 
     @Test

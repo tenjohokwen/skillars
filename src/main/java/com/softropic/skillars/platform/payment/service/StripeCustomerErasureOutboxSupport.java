@@ -50,18 +50,34 @@ public class StripeCustomerErasureOutboxSupport {
         // skillars-deferred-177 (RS03i): commits with the outbox row below, so StripeCustomerErasureSweep skips this payer.
         stripeCustomerRepository.markErasureScheduled(userId, java.time.Instant.now());
         stripeCustomerRepository.findById(userId).ifPresent(customer -> {
-            final String json;
-            try {
-                json = objectMapper.writeValueAsString(new StripeCustomerErasurePayload(customer.getStripeCustomerId()));
-            } catch (JsonProcessingException e) {
-                // One scalar field; cannot realistically fail. Throw so the erasure rolls back and is
-                // re-driven rather than committing COMPLETED with the Stripe customer never scheduled.
-                throw new IllegalStateException("[STRIPE_CUSTOMER_ERASURE_ENQUEUE_FAILED] userId=" + userId, e);
-            }
-            outboxService.enqueue(AGGREGATE_TYPE, json);
-            outboxService.requestDrainAfterCommit();
+            enqueue(new StripeCustomerErasurePayload(customer.getStripeCustomerId()), "userId=" + userId);
             log.info("[STRIPE_CUSTOMER_ERASURE_SCHEDULED userId={}]", userId);
         });
+    }
+
+    /**
+     * skillars-deferred-177 (review round 3): erases a Stripe customer that no {@code stripe_customers} row names, created by a
+     * request that then lost the first-creation race (a concurrent request saved the payer's row first). It carries the
+     * payer's email and user id at Stripe, and neither the GDPR erasure nor {@link StripeCustomerErasureSweep} would ever
+     * find it. Its own transaction: the callers run outside one.
+     */
+    @Transactional
+    public void scheduleOrphanErasure(String stripeCustomerId) {
+        enqueue(new StripeCustomerErasurePayload(stripeCustomerId), "orphan " + stripeCustomerId);
+        log.info("[STRIPE_CUSTOMER_ORPHAN_ERASURE_SCHEDULED stripeCustomerId={}] lost the first-creation race", stripeCustomerId);
+    }
+
+    private void enqueue(StripeCustomerErasurePayload payload, String what) {
+        final String json;
+        try {
+            json = objectMapper.writeValueAsString(payload);
+        } catch (JsonProcessingException e) {
+            // One scalar field; cannot realistically fail. Throw so the caller's transaction rolls back and is re-driven
+            // rather than committing with the Stripe customer never scheduled.
+            throw new IllegalStateException("[STRIPE_CUSTOMER_ERASURE_ENQUEUE_FAILED] " + what, e);
+        }
+        outboxService.enqueue(AGGREGATE_TYPE, json);
+        outboxService.requestDrainAfterCommit();
     }
 
     /** Outbox payload: the Stripe customer id only (no personal data). */

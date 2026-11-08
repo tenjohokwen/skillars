@@ -95,6 +95,7 @@ public class SessionPackPaymentService {
     private final AgeVerificationService ageVerificationService;
     private final StripeCustomerEmailSyncOutboxSupport stripeCustomerEmailSync;
     private final StripeCustomerCardWrites stripeCustomerCardWrites;
+    private final StripeCustomerErasureOutboxSupport stripeCustomerErasureOutboxSupport;
 
     /**
      * Purchase a session pack for a player.
@@ -1068,13 +1069,32 @@ public class SessionPackPaymentService {
             sc.setParentId(parentId);
             sc.setStripeCustomerId(stripeCustomerId);
             sc.setStripePaymentMethodId(paymentMethodId);
-            StripeCustomer saved = stripeCustomerRepository.save(sc);
+            final StripeCustomer saved;
+            try {
+                saved = stripeCustomerRepository.save(sc);
+            } catch (DataIntegrityViolationException e) {
+                discardUnrecordedCustomer(stripeCustomerId); // skillars-deferred-177 review round 3
+                throw e;
+            }
             // skillars-deferred-176 AC2: an email change that committed while the customer was created enqueued no sync.
             if (stripeCustomerEmailSync.syncIfEmailChangedSince(parentId, emailBefore)) {
                 throw erasedPayer(parentId); // skillars-deferred-177 (RS03h); its Stripe erasure is already scheduled
             }
             return saved;
         });
+    }
+
+    /**
+     * skillars-deferred-177 (review round 3): a Stripe customer this request created but could not record, because a concurrent
+     * first request saved the payer's row first. Never throws: the caller is already handling the lost race.
+     */
+    public void discardUnrecordedCustomer(String stripeCustomerId) {
+        try {
+            stripeCustomerErasureOutboxSupport.scheduleOrphanErasure(stripeCustomerId);
+        } catch (RuntimeException e) {
+            log.error("[STRIPE_CUSTOMER_ORPHAN_ERASURE_FAILED stripeCustomerId={}] delete it in the Stripe dashboard",
+                stripeCustomerId, e);
+        }
     }
 
     /** skillars-deferred-177 (RS03h): refuses ({@link #erasedPayer}) a payer whose row is gone or who has been erased. */

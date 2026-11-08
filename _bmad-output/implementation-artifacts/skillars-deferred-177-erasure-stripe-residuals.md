@@ -96,7 +96,7 @@ Claude Opus 5.5 (claude-opus-5-5)
 - `src/main/java/com/softropic/skillars/platform/payment/api/SessionPackPaymentResource.java`
 - `src/main/java/com/softropic/skillars/platform/payment/api/PaymentApiAdvice.java`
 - `src/main/java/com/softropic/skillars/platform/payment/contract/exception/PaymentGatewayException.java`, `PackNoChargeException.java`
-- `src/main/java/com/softropic/skillars/platform/payment/service/StripeClient.java`, `StripePaymentGateway.java`; test `StripePaymentGatewayTest.java`, `StripeCustomerCardWritesTest.java`
+- test `StripeCustomerCardWritesTest.java`
 - `src/test/java/com/softropic/skillars/platform/payment/service/StripeCustomerErasureSweepTest.java` (new)
 - `src/test/java/com/softropic/skillars/platform/payment/service/SessionPackPaymentServiceTest.java`
 - `src/test/java/com/softropic/skillars/platform/payment/api/SessionPackPaymentResourceWebMvcTest.java`
@@ -116,5 +116,9 @@ Claude Opus 5.5 (claude-opus-5-5)
   failed still refuses the request (security reviewer, kept on merit though outside its category).
 - 2026-11-08: `/pr-review` round 2 (23916508): a refused purchase keeps `payment.accountErased` (PackNoChargeException kept
   only `payment.cardDeclined`) and logs at WARN; the refusal nulls the attempt's card ids (a row inserted after the erasure's
-  own nulling kept them); Stripe customer creation sends an idempotency key from the payer id and the email's hash, so a
+  own nulling kept them); Stripe customer creation sent an idempotency key from the payer id and the email's hash, so a
   request that loses the first-creation race leaves no customer that no row (and no erasure) names.
+- 2026-11-08: `/pr-review` round 3 (3600d91b): that key withdrawn (general reviewer, medium: Stripe stores a 500 against
+  the key and replays it for 24 hours, so one Stripe error would block the payer's first customer for a day; security
+  reviewer: a concurrent same-key request gets 409). Instead the request that loses the race enqueues the Stripe erasure of
+  the customer it created (`StripeCustomerErasureOutboxSupport.scheduleOrphanErasure`), on both creation paths.
