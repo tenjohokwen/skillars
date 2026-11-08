@@ -88,8 +88,9 @@ import jakarta.servlet.http.HttpServletResponse;
  *         {@code existsLiveBySessionId}) refusing a JWT whose refresh chain has no live row. That is
  *         what makes a plain logout end this session's access token. It also closes, for any JWT
  *         carrying the {@code rtsid} claim, the theft-driven mass-revocation gap this paragraph used
- *         to describe as open: {@code markAllUsedByUserId} leaves every row {@code used}, and the
- *         liveness predicate requires {@code used = false}. GDPR erasure is still caught by
+ *         to describe as open: {@code markAllUsedByUserId} leaves every row {@code used} (and, since
+ *         skillars-deferred-179, {@code revoked_at} stamped), and the liveness predicate requires
+ *         {@code used = false}. GDPR erasure is still caught by
  *         {@code locked = true} as well, so neither mechanism depends on the other.</li>
  * </ul>
  * Either path also rewrites the {@code user}, {@code potc} and {@code rint} cookies (see

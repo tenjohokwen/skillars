@@ -122,13 +122,6 @@ and deleted from the list below.
   bound-exceeded as its own outcome and answer 401 without revoking, accepting that a genuinely deep
   replay then goes undetected too.
 
-- **[skillars-deferred-167 residual, low/performance]** `extendTtlOfToken` now performs a FOURTH full JWT
-  parse and HMAC verification per authenticated request (`extractPrincipal`, `extractDbRefreshToken`,
-  `extractSessionIssuedAt`, and now `extractRefreshSessionId`), on the path the code repeatedly documents
-  as the cheap, DB-free one taken by every request. It follows the existing `SESSION_ISSUED_AT` shape
-  rather than inventing a one-off, which is why it shipped this way. Parsing once and threading the claims
-  through fixes all four together and would reshape `ClaimsExtractor`'s API — deliberately not done inside
-  a security story.
 - **[skillars-deferred-166 residual, low]** `findByTokenHashForUpdate`/`findByIdForUpdate` take
   `PESSIMISTIC_WRITE` locks that WAIT without a bound. A finite `jakarta.persistence.lock.timeout` is inert
   on PostgreSQL (Hibernate's dialect special-cases only `NO_WAIT`/`SKIP_LOCKED`, as
@@ -140,17 +133,6 @@ and deleted from the list below.
   that story (the same rows previously queued behind `markUsedByTokenHash`'s plain `UPDATE`) and bounded in
   practice because every holder is a short transaction. A real fix is a session `lock_timeout` on
   application connections, or rate-limiting those two endpoints.
-- **[skillars-deferred-166 residual, low]** `RefreshTokenRepository.markAllUsedByUserId` sets
-  `used = true` but not `revoked_at`, so a token killed by a revoke-all (password change, reset,
-  suspension, GDPR erasure, admin action) still reads as "rotated, successor unknown" rather than
-  "revoked". A replay of one therefore reaches the reuse branch and runs a second account-wide
-  revocation instead of the plain 401 a revoked token now gets. Mostly masked already: every revoke-all
-  caller except `GdprErasureService` also bumps `security_session_invalidated_at`, and
-  `AuthService.refresh`'s epoch check (that story's AC6) answers those with a 401 before the reuse
-  branch is reached; `GdprErasureService` locks the account, which the liveness gate catches. Fixing it
-  properly means adding `revoked_at = :now` to that bulk `UPDATE`, which changes a method with six
-  callers — deliberately out of scope there, recorded so the next person to touch it knows why the two
-  columns are not symmetric.
 
 - RS03b [medium/security] Lost old mailbox and forgotten password: no self-service recovery. An email change can be
   undone only from the old address (skillars-deferred-172), and a password reset goes to the account's current

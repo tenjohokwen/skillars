@@ -146,27 +146,32 @@ public interface RefreshTokenRepository extends JpaRepository<RefreshToken, Long
     Optional<RefreshToken> findByIdForUpdate(@Param("id") Long id);
 
     /**
-     * skillars-deferred-100 AC3: bulk {@code UPDATE} against a {@code @Version} table
-     * ({@link RefreshToken}). skillars-deferred-101 AC11: bumps {@code version} for defence-in-depth.
-     * The only column written (besides version), {@code used}, is a monotonic terminal flag: a row
-     * is created {@code used = false} and only ever moves to {@code used = true}. Every concurrent
-     * managed writer also only ever sets {@code used = true}, so a stale managed {@code save()}
-     * racing this bulk update cannot resurrect a revoked token to {@code used = false}. The version
-     * bump ensures that any concurrent stale write touching another column fails its optimistic-lock
-     * check instead of silently succeeding, preventing unintended state resurrection.
+     * Kills every refresh token of a user: the account-wide revocation behind a password change or reset, a
+     * suspension, an email change, a theft response and a GDPR erasure. skillars-deferred-179: it now stamps
+     * {@code revoked_at} as well as {@code used}, by delegating to {@link #markAllRevokedByUserId}, so a
+     * token it killed reads as <em>revoked</em>. Before, it set {@code used} alone, and a row left
+     * {@code used = true, revoked_at = NULL} reads as <em>rotated, successor unknown</em>: a replay of one
+     * reached {@code AuthService.refresh}'s reuse branch and ran a second account-wide revocation, where a
+     * deliberately ended session should get the plain {@code Revoked} 401 (the skillars-deferred-166
+     * residual). Same {@code REQUIRES_NEW} propagation and {@code version} bump as before (both are on the
+     * method it delegates to); rows already revoked are left as they are, so an earlier {@code revoked_at}
+     * is never moved forward. The name is kept for its ten callers.
+     *
+     * <p>A Spring Data default method runs against the repository proxy, so the delegated call keeps its
+     * transaction.
      */
-    @Modifying
-    @Transactional(propagation = Propagation.REQUIRES_NEW)
-    @Query("UPDATE RefreshToken r SET r.used = true, r.version = r.version + 1 WHERE r.userId = :userId")
-    void markAllUsedByUserId(@Param("userId") Long userId);
+    default void markAllUsedByUserId(Long userId) {
+        markAllRevokedByUserId(userId, Instant.now(com.softropic.skillars.infrastructure.util.ClockProvider.getClock()));
+    }
 
     /**
      * skillars-deferred-166: {@link #markAllUsedByUserId} that also stamps {@code revoked_at}, for
      * {@code RefreshTokenRevocationService.revokeAllForUser} — the fallback when a logout's chain is longer
      * than the walk will follow.
      *
-     * <p>Why not just reuse {@link #markAllUsedByUserId}: that one sets {@code used} alone, and since this
-     * story {@code used} no longer means "revoked" on its own. Rows left {@code used = true} with
+     * <p>Since skillars-deferred-179 {@link #markAllUsedByUserId} delegates here, so every account-wide
+     * revocation stamps both columns. The reasoning that made this method necessary in deferred-166 still
+     * stands: {@code used} no longer means "revoked" on its own. Rows left {@code used = true} with
      * {@code revoked_at = NULL} read as <em>rotated, successor unknown</em>, so the next refresh presenting
      * one takes {@code AuthService}'s reuse branch — a second account-wide revocation plus a
      * {@code security_session_invalidated_at} bump and a "token reuse detected" 401 — where a deliberately
@@ -175,7 +180,7 @@ public interface RefreshTokenRepository extends JpaRepository<RefreshToken, Long
      *
      * <p>Only touches rows that are not already revoked, so a repeat call is zero rows rather than a
      * rewrite that would move an earlier {@code revoked_at} forward. Bumps {@code version} for the same
-     * reason {@link #markAllUsedByUserId} does (skillars-deferred-101 AC11), which is also what
+     * reason the bulk revocations always have (skillars-deferred-101 AC11), which is also what
      * {@code NativeModifyingVersionAuditTest} requires of a bulk write against a {@code @Version} table.
      */
     @Modifying

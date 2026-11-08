@@ -73,20 +73,28 @@ public class ClaimsExtractorImpl implements ClaimsExtractor {
     public Principal extractPrincipal(HttpServletRequest request) {
         final String token = CookieUtil.getCookieValue(request, JWT_COOKIE_NAME);
         if (StringUtils.isNotBlank(token)) {
-            final Claims claims = extractClaims(token);
-            final Set<SimpleGrantedAuthority> authorities = getRoles(claims);
-            final boolean otpEnabled = Objects.nonNull(claims.get(OTP_ENABLED)) && (boolean) claims.get(OTP_ENABLED);
-            return new Principal.Builder().username(claims.getSubject())
-                    .password("protectedPassword")
-                    .enabled(true)
-                    .otpEnabled(otpEnabled)
-                    .authorities(authorities)
-                    .gender(Gender.fromString(claims.get(GENDER, String.class)))
-                    .businessId(claims.get(BUS_ID, String.class))
-                    .phone(" ")
-                    .displayName(claims.get(DISPLAY_NAME, String.class))
-                    .build();
+            return principalFrom(extractClaims(token));
         }
+        return anonymousPrincipal();
+    }
+
+    @Override
+    public Principal principalFrom(Claims claims) {
+        final Set<SimpleGrantedAuthority> authorities = getRoles(claims);
+        final boolean otpEnabled = Objects.nonNull(claims.get(OTP_ENABLED)) && (boolean) claims.get(OTP_ENABLED);
+        return new Principal.Builder().username(claims.getSubject())
+                .password("protectedPassword")
+                .enabled(true)
+                .otpEnabled(otpEnabled)
+                .authorities(authorities)
+                .gender(Gender.fromString(claims.get(GENDER, String.class)))
+                .businessId(claims.get(BUS_ID, String.class))
+                .phone(" ")
+                .displayName(claims.get(DISPLAY_NAME, String.class))
+                .build();
+    }
+
+    private static Principal anonymousPrincipal() {
         return new Principal.Builder().username(ANONYMOUS)
                 .password("N/A")
                 .enabled(false)
@@ -101,29 +109,31 @@ public class ClaimsExtractorImpl implements ClaimsExtractor {
     @Override
     public Long extractDbRefreshToken(HttpServletRequest request) throws InvalidJWTDataException {
         final String token = CookieUtil.getCookieValue(request, JWT_COOKIE_NAME);
-        if (StringUtils.isNotBlank(token)) {
-            final Claims claims = extractClaims(token);
-            Object refreshToken = claims.get(DB_REFRESH_TOKEN);
-            if (refreshToken == null) {
-                return null;
-            }
-            return Instant.ofEpochMilli(((Number) refreshToken).longValue()).toEpochMilli();
+        return StringUtils.isNotBlank(token) ? dbRefreshTokenFrom(extractClaims(token)) : null;
+    }
+
+    @Override
+    public Long dbRefreshTokenFrom(Claims claims) {
+        Object refreshToken = claims.get(DB_REFRESH_TOKEN);
+        if (refreshToken == null) {
+            return null;
         }
-        return null;
+        return Instant.ofEpochMilli(((Number) refreshToken).longValue()).toEpochMilli();
     }
 
     @Override
     public Long extractSessionIssuedAt(HttpServletRequest request) {
         final String token = CookieUtil.getCookieValue(request, JWT_COOKIE_NAME);
-        if (StringUtils.isNotBlank(token)) {
-            final Claims claims = extractClaims(token);
-            Object sessionIssuedAt = claims.get(SESSION_ISSUED_AT);
-            if (sessionIssuedAt == null) {
-                return null;
-            }
-            return Instant.ofEpochMilli(((Number) sessionIssuedAt).longValue()).toEpochMilli();
+        return StringUtils.isNotBlank(token) ? sessionIssuedAtFrom(extractClaims(token)) : null;
+    }
+
+    @Override
+    public Long sessionIssuedAtFrom(Claims claims) {
+        Object sessionIssuedAt = claims.get(SESSION_ISSUED_AT);
+        if (sessionIssuedAt == null) {
+            return null;
         }
-        return null;
+        return Instant.ofEpochMilli(((Number) sessionIssuedAt).longValue()).toEpochMilli();
     }
 
     /**
@@ -144,10 +154,12 @@ public class ClaimsExtractorImpl implements ClaimsExtractor {
     @Override
     public UUID extractRefreshSessionId(HttpServletRequest request) {
         final String token = CookieUtil.getCookieValue(request, JWT_COOKIE_NAME);
-        if (StringUtils.isBlank(token)) {
-            return null;
-        }
-        final Object raw = extractClaims(token).get(RTKN_SESSION);
+        return StringUtils.isBlank(token) ? null : refreshSessionIdFrom(extractClaims(token));
+    }
+
+    @Override
+    public UUID refreshSessionIdFrom(Claims claims) {
+        final Object raw = claims.get(RTKN_SESSION);
         if (raw == null) {
             return null;
         }

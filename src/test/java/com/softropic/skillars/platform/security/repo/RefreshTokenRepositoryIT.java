@@ -59,6 +59,58 @@ class RefreshTokenRepositoryIT extends AbstractIntegrationTest {
             .isEqualTo(versionAfterFirstCall);
     }
 
+    private static final long REVOKE_ALL_USER_ID = 9179_000001L;
+
+    private RefreshToken tokenOf(long userId, String hash, boolean used, Instant revokedAt) {
+        RefreshToken token = new RefreshToken();
+        token.setUserId(userId);
+        token.setTokenHash(hash);
+        token.setExpiresAt(Instant.now().plus(Duration.ofDays(1)));
+        token.setUsed(used);
+        token.setRevokedAt(revokedAt);
+        return refreshTokenRepository.save(token);
+    }
+
+    /** token_hash is exactly 64 characters (RefreshToken's @Size). */
+    private static String hash64(String prefix) {
+        return (prefix + "0".repeat(64)).substring(0, 64);
+    }
+
+    private Timestamp revokedAtOf(String tokenHash) {
+        return jdbcTemplate.queryForObject(
+            "SELECT revoked_at FROM main.refresh_tokens WHERE token_hash = ?", Timestamp.class, tokenHash);
+    }
+
+    /**
+     * skillars-deferred-179: an account-wide revocation stamps revoked_at as well as used, so a killed token reads as
+     * revoked (not "rotated, successor unknown"); an earlier revoked_at is kept; and it still commits on its own when the
+     * caller's transaction rolls back (REQUIRES_NEW, through the default method).
+     */
+    @Test
+    void markAllUsedByUserId_stampsRevokedAt_keepsAnEarlierOne_andSurvivesTheCallersRollback() {
+        transactionTemplate.execute(status -> {
+            insertUser(REVOKE_ALL_USER_ID, "deferred179.repo-test@skillars-test.com");
+            return null;
+        });
+        Instant earlier = Instant.now().minus(Duration.ofHours(2)).truncatedTo(java.time.temporal.ChronoUnit.MILLIS);
+        String live = hash64("deferred179live");
+        String rotated = hash64("deferred179rotated");
+        String revoked = hash64("deferred179revoked");
+        tokenOf(REVOKE_ALL_USER_ID, live, false, null);
+        tokenOf(REVOKE_ALL_USER_ID, rotated, true, null);
+        tokenOf(REVOKE_ALL_USER_ID, revoked, true, earlier);
+
+        transactionTemplate.executeWithoutResult(status -> {
+            refreshTokenRepository.markAllUsedByUserId(REVOKE_ALL_USER_ID);
+            status.setRollbackOnly(); // a caller that revokes, then throws
+        });
+
+        assertThat(usedFlagOf(live)).isTrue();
+        assertThat(revokedAtOf(live)).as("live token now reads as revoked").isNotNull();
+        assertThat(revokedAtOf(rotated)).as("rotated token now reads as revoked").isNotNull();
+        assertThat(revokedAtOf(revoked).toInstant()).as("an earlier revocation is not moved forward").isEqualTo(earlier);
+    }
+
     private boolean usedFlagOf(String tokenHash) {
         return jdbcTemplate.queryForObject(
             "SELECT used FROM main.refresh_tokens WHERE token_hash = ?", Boolean.class, tokenHash);
