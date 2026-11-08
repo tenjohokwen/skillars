@@ -15,6 +15,7 @@ export * from './session.js'
 export * from './lockerRoom.js'
 export * from './notifications.js'
 export * from './privacy.js'
+export * from './trust.js'
 
 // One screen object per page under test. Thin by policy: locators and composite actions, never
 // assertions. Only pages that already carry data-testids are modelled; the rest wait for the
@@ -203,6 +204,8 @@ export class CoachPublicProfileScreen extends Screen {
   languages = () => this.tid('coach-profile-languages')
   location = () => this.tid('coach-profile-location')
   specialties = () => this.tid('coach-profile-specialties')
+  /** S-09: 'on record (valid until MM/YYYY)' or 'no check on record'. */
+  safeguardingBadge = () => this.page.locator('[data-testid^="safeguarding-badge-"]')
   ageGroups = () => this.tid('coach-profile-age-groups')
   price = () => this.tid('coach-profile-price')
   packs = () => this.tid('coach-profile-packs')

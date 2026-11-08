@@ -91,4 +91,10 @@ export class AgeVerificationScreen extends Screen {
   verified = () => this.tid('age-verified')
   /** On a verified check: back to where the gate interrupted (`next`). */
   continue = () => this.tid('age-continue')
+  unavailable = () => this.tid('age-unavailable')
+  pending = () => this.tid('age-pending')
+  failed = () => this.tid('age-failed')
+  blocked = () => this.tid('age-blocked')
+  exhausted = () => this.tid('age-exhausted')
+  start = () => this.tid('age-start')
 }

@@ -1999,4 +1999,32 @@ export class Provisioner {
     const signed = `v1.${b64(Buffer.from(`${user.userId}:${category}`, 'utf8'))}`
     return `${signed}.${b64(createHmac('sha256', key).update(signed).digest())}`
   }
+
+  /**
+   * A full admin inspects a coach's pending safeguarding request (S-09), through the admin API: the check goes on
+   * record and the public profile shows it. ADM-14 (suite R) drives the same step through the admin console.
+   * Returns the record's valid-until date (ISO yyyy-MM-dd), as the coach's own status reports it.
+   */
+  async inspectSafeguarding(coach: CoachAccount): Promise<string> {
+    if (!coach.coachId) throw new Error('inspectSafeguarding needs a published coach')
+    const admin = await this.login({ email: E2E.adminEmail, password: E2E.adminPassword })
+    try {
+      await admin.api.post(`/admin/safeguarding/requests/${coach.coachId}/inspect`, {
+        expectStatus: (status) => status >= 200 && status < 300,
+      })
+    } finally {
+      await admin.dispose()
+    }
+    const self = await this.login(coach)
+    try {
+      const status = await self.api.json<{ status: string; validUntil: string }>(
+        'GET',
+        '/marketplace/coaches/me/safeguarding',
+      )
+      if (status.status !== 'VERIFIED') throw new Error(`Safeguarding check is ${status.status}`)
+      return status.validUntil
+    } finally {
+      await self.dispose()
+    }
+  }
 }
