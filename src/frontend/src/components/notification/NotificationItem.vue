@@ -3,6 +3,9 @@
     clickable
     class="notification-item"
     :class="{ 'notification-item--unread': !notification.readAt }"
+    data-testid="notification-item"
+    :data-type="notification.type"
+    :data-unread="notification.readAt ? 'false' : 'true'"
     @click="$emit('open', notification)"
   >
     <q-item-section avatar>
@@ -13,7 +16,11 @@
       <q-item-label caption>{{ when }}</q-item-label>
     </q-item-section>
     <q-item-section v-if="!notification.readAt" side>
-      <span class="notification-item__dot" :aria-label="t('notifications.unread')" />
+      <span
+        class="notification-item__dot"
+        :aria-label="t('notifications.unread')"
+        data-testid="notification-unread-dot"
+      />
     </q-item-section>
   </q-item>
 </template>

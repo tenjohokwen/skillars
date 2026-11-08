@@ -1,6 +1,6 @@
 <template>
   <q-page>
-    <div class="app-page fade-in">
+    <div class="app-page fade-in" data-testid="notifications-page">
       <div class="page-header q-mb-xl row items-center justify-between">
         <div>
           <div class="text-page-title">{{ t('notifications.title') }}</div>
@@ -17,12 +17,21 @@
         />
       </div>
 
-      <q-banner v-if="loadError" class="bg-negative text-white q-mb-md" rounded>
+      <q-banner
+        v-if="loadError"
+        class="bg-negative text-white q-mb-md"
+        rounded
+        data-testid="page-load-error"
+      >
         {{ t('notifications.loadError') }}
       </q-banner>
 
       <div class="glass-card--static q-pa-sm">
-        <div v-if="loading && !items.length" class="flex flex-center q-py-xl">
+        <div
+          v-if="loading && !items.length"
+          class="flex flex-center q-py-xl"
+          data-testid="page-loading"
+        >
           <q-spinner-dots size="40px" style="color: var(--accent-primary)" />
         </div>
         <div
@@ -32,7 +41,7 @@
         >
           {{ t('notifications.empty') }}
         </div>
-        <q-list v-else separator>
+        <q-list v-else separator data-testid="page-list">
           <NotificationItem
             v-for="n in items"
             :key="n.id"
@@ -48,6 +57,7 @@
           :max="totalPages"
           :max-pages="7"
           direction-links
+          data-testid="page-pagination"
           @update:model-value="load"
         />
       </div>

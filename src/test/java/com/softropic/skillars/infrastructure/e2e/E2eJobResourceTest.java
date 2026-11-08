@@ -1,6 +1,7 @@
 package com.softropic.skillars.infrastructure.e2e;
 
 import com.softropic.skillars.infrastructure.exception.AppSetupException;
+import com.softropic.skillars.platform.booking.service.BookingReminderScheduler;
 import com.softropic.skillars.platform.booking.service.StuckCompletionSweeperService;
 import com.softropic.skillars.platform.booking.service.UnresolvedSessionSweeperService;
 import com.softropic.skillars.platform.payment.service.SessionPackForfeitureScheduler;
@@ -31,11 +32,12 @@ class E2eJobResourceTest {
     private final SessionPackForfeitureScheduler forfeiture = mock(SessionPackForfeitureScheduler.class);
     private final UnresolvedSessionSweeperService sweeper = mock(UnresolvedSessionSweeperService.class);
     private final StuckCompletionSweeperService stuck = mock(StuckCompletionSweeperService.class);
+    private final BookingReminderScheduler reminders = mock(BookingReminderScheduler.class);
 
     private E2eJobResource resource(String... profiles) {
         MockEnvironment env = new MockEnvironment();
         env.setActiveProfiles(profiles);
-        return new E2eJobResource(env, lockProvider, forfeiture, sweeper, stuck);
+        return new E2eJobResource(env, lockProvider, forfeiture, sweeper, stuck, reminders);
     }
 
     @Test
@@ -51,6 +53,20 @@ class E2eJobResourceTest {
         assertThat(config.getValue().getName()).isEqualTo("SessionPackForfeitureScheduler_expire");
         assertThat(config.getValue().getLockAtLeastFor()).isEqualTo(Duration.ZERO);
         verify(lock).unlock();
+    }
+
+    @Test
+    void runsTheBookingRemindersUnderTheirSchedulerLockName() {
+        SimpleLock lock = mock(SimpleLock.class);
+        when(lockProvider.lock(any())).thenReturn(Optional.of(lock));
+
+        assertThat(resource("dev", "e2e").run("booking-reminders").getStatusCode()).isEqualTo(HttpStatus.NO_CONTENT);
+
+        verify(reminders).processReminderWindows();
+        ArgumentCaptor<LockConfiguration> config = ArgumentCaptor.forClass(LockConfiguration.class);
+        verify(lockProvider).lock(config.capture());
+        assertThat(config.getValue().getName()).isEqualTo("BookingReminderScheduler_remind");
+        assertThat(config.getValue().getLockAtLeastFor()).isEqualTo(Duration.ZERO);
     }
 
     @Test

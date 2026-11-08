@@ -31,7 +31,7 @@
           @click="store.markAllRead()"
         />
       </div>
-      <q-list class="notification-menu__list">
+      <q-list class="notification-menu__list" data-testid="bell-menu">
         <q-item v-if="store.loadingRecent && !store.recent.length">
           <q-item-section class="text-meta">{{ t('common.loading') }}</q-item-section>
         </q-item>
