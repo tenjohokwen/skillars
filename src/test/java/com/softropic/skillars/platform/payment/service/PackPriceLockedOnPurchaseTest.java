@@ -44,7 +44,16 @@ class PackPriceLockedOnPurchaseTest {
     @Mock com.softropic.skillars.platform.config.service.ConfigService configService;
     @Mock com.softropic.skillars.platform.payment.repo.SessionPackPurchaseAttemptRepository attemptRepository;
 
+    // skillars-deferred-177 (RS03h): an existing customer's payer is checked before the charge; live here.
+    @Mock StripeCustomerCardWrites stripeCustomerCardWrites;
+
     @InjectMocks SessionPackPaymentService sessionPackPaymentService;
+
+    @org.junit.jupiter.api.BeforeEach
+    void payerIsLive() {
+        org.mockito.Mockito.lenient().when(stripeCustomerCardWrites.payerLive(any())).thenReturn(true);
+        org.mockito.Mockito.lenient().when(stripeCustomerCardWrites.writeCardIfPayerLive(any(), any())).thenReturn(true);
+    }
 
     private static final Long PARENT_ID = 7001L;
     private static final Long PLAYER_ID = 7002L;
