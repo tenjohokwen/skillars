@@ -809,15 +809,20 @@ public class SubscriptionService {
      * outbox. The Stripe calls run after commit, off the request path ({@link PaymentMethodSyncOutboxHandler}),
      * so a Stripe outage neither fails nor slows the save, and a failed sync is retried by the outbox.
      * The caller must have created the {@code stripe_customers} row first (that needs a Stripe call).
+     *
+     * <p>skillars-deferred-176 review round 6 (AC3): a one-column write under the row lock, never onto an erased payer's
+     * row, so an erasure committing during the save does not get its NULLed card written back. Nothing is enqueued
+     * when the payer was erased.
      */
     @Transactional
     public void savePaymentMethodAndScheduleSync(Long userId, String paymentMethodId) {
         StripeIdFormat.requirePaymentMethodId(paymentMethodId);
-        StripeCustomer customer = stripeCustomerRepository.findById(userId)
-            .orElseThrow(() -> new IllegalStateException("stripe_customers row missing for userId=" + userId));
-        customer.setStripePaymentMethodId(paymentMethodId);
-        stripeCustomerRepository.save(customer);
-        paymentMethodSyncOutboxSupport.enqueueSync(userId, paymentMethodId);
+        if (!stripeCustomerRepository.existsById(userId)) {
+            throw new IllegalStateException("stripe_customers row missing for userId=" + userId);
+        }
+        if (stripeCustomerCardWrites.writeCardIfPayerLive(userId, paymentMethodId)) {
+            paymentMethodSyncOutboxSupport.enqueueSync(userId, paymentMethodId);
+        }
     }
 
     /**

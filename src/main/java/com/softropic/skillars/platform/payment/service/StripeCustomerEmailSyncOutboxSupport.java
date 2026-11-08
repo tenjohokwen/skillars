@@ -67,11 +67,16 @@ public class StripeCustomerEmailSyncOutboxSupport {
      * Called after a new {@code stripe_customers} row is inserted: if the user has been erased meanwhile, schedules the
      * Stripe-side erasure; otherwise, if the user's email is no longer the one read before the customer was created,
      * enqueues a sync. Never throws: the customer exists at Stripe either way, and failing the caller would strand it.
+     *
+     * <p>Review round 6: the email is read {@code FOR SHARE}, after the row is saved. An erasure that wrote the tombstone
+     * before this read is waited for, so its tombstone is seen; one that writes it after this read waits for this
+     * transaction, so its own Stripe-customer lookup, which follows the tombstone, finds the row. Either way the Stripe
+     * customer is erased.
      */
     public void syncIfEmailChangedSince(Long userId, String emailBefore) {
         try {
             transactionTemplate.executeWithoutResult(status -> {
-                String emailNow = currentEmail(userId);
+                String emailNow = userRepository.findEmailByIdForShare(userId).orElse(null);
                 if (StripeCustomerCardWrites.isErasureTombstone(userId, emailNow)) {
                     erasureOutboxSupport.scheduleErasure(userId);
                     log.warn("[STRIPE_CUSTOMER_ERASURE_SCHEDULED_LATE userId={}] erased while its Stripe customer was created", userId);

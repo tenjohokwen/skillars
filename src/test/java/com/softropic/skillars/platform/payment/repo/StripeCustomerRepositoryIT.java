@@ -254,6 +254,108 @@ class StripeCustomerRepositoryIT extends AbstractIntegrationTest {
         }
     }
 
+    // ── skillars-deferred-176 review round 6 ───────────────────────────────────────────────────────────────────
+
+    @Autowired private com.softropic.skillars.platform.payment.service.StripeCustomerEmailSyncOutboxSupport emailSyncSupport;
+
+    private static final String TOMBSTONE = "deleted." + ERASED + "@erased.io";
+
+    private void insertErasableUser() {
+        commit("INSERT INTO main.\"user\" (id, login, login_id_type, password_hash, activated, first_name, last_name, gender, dob, email) "
+            + "VALUES (?, 'it176@test.com', 'EMAIL', '{noop}x', true, 'T', 'P', 'MALE', '1985-01-01', 'it176@test.com')", ERASED);
+    }
+
+    /** An erasure that has written the tombstone and run {@code scheduleErasure}, held open until {@code release}. */
+    private java.util.concurrent.Future<?> openErasure(java.util.concurrent.ExecutorService pool,
+                                                       java.util.concurrent.CountDownLatch erasing,
+                                                       java.util.concurrent.CountDownLatch release) {
+        return pool.submit(() -> transactionTemplate.executeWithoutResult(status -> {
+            jdbcTemplate.update("UPDATE main.\"user\" SET email = ?, login = ? WHERE id = ?", TOMBSTONE, TOMBSTONE, ERASED);
+            erasureSupport.scheduleErasure(ERASED);
+            erasing.countDown();
+            try {
+                release.await(10, java.util.concurrent.TimeUnit.SECONDS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        }));
+    }
+
+    private void removeErasableUser(String stripeCustomerId) {
+        commit("DELETE FROM main.outbox_messages WHERE aggregate_type = ? AND payload->>'stripeCustomerId' = ?",
+            com.softropic.skillars.platform.payment.service.StripeCustomerErasureOutboxSupport.AGGREGATE_TYPE, stripeCustomerId);
+        commit("DELETE FROM main.outbox_messages WHERE aggregate_type = ? AND payload->>'userId' = ?",
+            com.softropic.skillars.platform.payment.service.PaymentMethodSyncOutboxSupport.AGGREGATE_TYPE, String.valueOf(ERASED));
+        commit("DELETE FROM payment.stripe_customers WHERE parent_id = ?", ERASED);
+        commit("DELETE FROM main.\"user\" WHERE id = ?", ERASED);
+    }
+
+    /** V1: the save-card endpoint's write waits on an erasure, then sees the tombstone and writes no card and no sync. */
+    @Test
+    void aCardSaveRacingAnErasure_waits_andWritesNoCardOrSync() throws Exception {
+        insertErasableUser();
+        commit("INSERT INTO payment.stripe_customers (parent_id, stripe_customer_id, stripe_payment_method_id) "
+            + "VALUES (?, 'cus_it176_erased', 'pm_before')", ERASED);
+        java.util.concurrent.CountDownLatch erasing = new java.util.concurrent.CountDownLatch(1);
+        java.util.concurrent.CountDownLatch release = new java.util.concurrent.CountDownLatch(1);
+        java.util.concurrent.ExecutorService pool = java.util.concurrent.Executors.newFixedThreadPool(2);
+        try {
+            java.util.concurrent.Future<?> erasure = openErasure(pool, erasing, release);
+            erasing.await(10, java.util.concurrent.TimeUnit.SECONDS);
+            java.util.concurrent.Future<?> save = pool.submit(
+                () -> subscriptionService.savePaymentMethodAndScheduleSync(ERASED, "pm_after_erasure"));
+            waitUntilABackendWaitsOnALock();
+
+            release.countDown();
+            erasure.get(10, java.util.concurrent.TimeUnit.SECONDS);
+            save.get(10, java.util.concurrent.TimeUnit.SECONDS);
+
+            org.assertj.core.api.Assertions.assertThat(
+                stripeCustomerRepository.findById(ERASED).orElseThrow().getStripePaymentMethodId()).isNull();
+            org.assertj.core.api.Assertions.assertThat(jdbcTemplate.queryForObject(
+                "SELECT count(*) FROM main.outbox_messages WHERE aggregate_type = ? AND payload->>'userId' = ?", Integer.class,
+                com.softropic.skillars.platform.payment.service.PaymentMethodSyncOutboxSupport.AGGREGATE_TYPE,
+                String.valueOf(ERASED))).isZero();
+        } finally {
+            release.countDown();
+            pool.shutdownNow();
+            removeErasableUser("cus_it176_erased");
+        }
+    }
+
+    /**
+     * V2: the erasure found no customer row, then a first customer is created while it is still open. The post-creation
+     * check waits for the erasure, sees the tombstone, and schedules the Stripe erasure the erasure itself could not.
+     */
+    @Test
+    void aCustomerCreatedDuringAnErasure_getsItsStripeErasureScheduled() throws Exception {
+        insertErasableUser();
+        java.util.concurrent.CountDownLatch erasing = new java.util.concurrent.CountDownLatch(1);
+        java.util.concurrent.CountDownLatch release = new java.util.concurrent.CountDownLatch(1);
+        java.util.concurrent.ExecutorService pool = java.util.concurrent.Executors.newFixedThreadPool(2);
+        try {
+            java.util.concurrent.Future<?> erasure = openErasure(pool, erasing, release);
+            erasing.await(10, java.util.concurrent.TimeUnit.SECONDS);
+            commit("INSERT INTO payment.stripe_customers (parent_id, stripe_customer_id) VALUES (?, 'cus_it176_late')", ERASED);
+            java.util.concurrent.Future<?> check = pool.submit(
+                () -> emailSyncSupport.syncIfEmailChangedSince(ERASED, "it176@test.com"));
+            waitUntilABackendWaitsOnALock();
+
+            release.countDown();
+            erasure.get(10, java.util.concurrent.TimeUnit.SECONDS);
+            check.get(10, java.util.concurrent.TimeUnit.SECONDS);
+
+            org.assertj.core.api.Assertions.assertThat(jdbcTemplate.queryForObject(
+                "SELECT count(*) FROM main.outbox_messages WHERE aggregate_type = ? AND payload->>'stripeCustomerId' = ?",
+                Integer.class, com.softropic.skillars.platform.payment.service.StripeCustomerErasureOutboxSupport.AGGREGATE_TYPE,
+                "cus_it176_late")).isEqualTo(1);
+        } finally {
+            release.countDown();
+            pool.shutdownNow();
+            removeErasableUser("cus_it176_late");
+        }
+    }
+
     private void waitUntilABackendWaitsOnALock() throws InterruptedException {
         for (int i = 0; i < 100; i++) {
             Integer waiting = jdbcTemplate.queryForObject(

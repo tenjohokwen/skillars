@@ -4,7 +4,6 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.softropic.skillars.platform.outbox.service.OutboxService;
 import com.softropic.skillars.platform.payment.repo.StripeCustomerRepository;
 import com.softropic.skillars.platform.security.contract.event.AccountEmailChangedEvent;
-import com.softropic.skillars.platform.security.repo.User;
 import com.softropic.skillars.platform.security.repo.UserRepository;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -37,10 +36,9 @@ class StripeCustomerEmailSyncOutboxSupportTest {
             userRepository, new TransactionTemplate(transactionManager), erasureOutboxSupport);
     }
 
+    /** Review round 6: the post-creation check reads the email under FOR SHARE. */
     private void email(String email) {
-        User u = new User();
-        u.setEmail(email);
-        when(userRepository.findOneById(7L)).thenReturn(Optional.of(u));
+        when(userRepository.findEmailByIdForShare(7L)).thenReturn(Optional.of(email));
     }
 
     // skillars-deferred-176 AC2 (RS03e)
