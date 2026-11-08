@@ -221,6 +221,14 @@ public class GdprRequestService {
         if (bookingRepository.existsByPlayerIdAndStatusIn(playerId, ERASURE_BLOCKING_BOOKING_STATUSES)) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "gdpr.activeBookingsExist");
         }
+        // Owner decision 2026-11-08: the same holds as an account's erasure, which would take this child too.
+        if (gdprRequestRepository.familyHasDisputableBooking(List.of(playerId), DisputeService.ELIGIBLE_STATUSES,
+                disputeWindowStart())) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "gdpr.disputeWindowOpen");
+        }
+        if (gdprRequestRepository.familyHasUnusedPackCredits(null, List.of(playerId))) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "gdpr.unusedPackCredits");
+        }
         GdprRequest request = insertOrConflict(new GdprRequest(parentUserId, playerId, "ERASURE", "PENDING"));
         eventPublisher.publishEvent(new GdprErasureRequestedEvent(this, request.getId(), parentUserId, playerId));
         log.info("[GDPR_CHILD_ERASURE_REQUESTED] requestId={} parentUserId={} playerId={}",

@@ -316,6 +316,9 @@ public interface BookingRepository extends JpaRepository<Booking, UUID> {
         """, nativeQuery = true)
     boolean existsInFlightChildErasureRequest(@Param("playerId") Long playerId);
 
+    // A FAILED account erasure counts only while GdprErasureService.retryFailedErasures still re-drives it
+    // (retry_count < its MAX_ERASURE_RETRY_ATTEMPTS, 3): one that has given up leaves a live account behind,
+    // which must not stay unbookable forever.
     // PRV-03 race: the booking-side half of the coach-erasure check. A coach whose own account ERASURE
     // request is in flight must not be booked: GdprRequestService.requestErasure refuses while any live
     // booking exists, under the coach_profiles row lock every creation path also takes, so either the
@@ -327,7 +330,8 @@ public interface BookingRepository extends JpaRepository<Booking, UUID> {
             WHERE cp.id = :coachId
               AND g.player_id IS NULL
               AND g.request_type = 'ERASURE'
-              AND g.status IN ('PENDING', 'PROCESSING', 'FAILED'))
+              AND (g.status IN ('PENDING', 'PROCESSING')
+                   OR (g.status = 'FAILED' AND g.retry_count < 3)))
         """, nativeQuery = true)
     boolean existsInFlightCoachErasureRequest(@Param("coachId") UUID coachId);
 
@@ -342,7 +346,8 @@ public interface BookingRepository extends JpaRepository<Booking, UUID> {
             WHERE pp.id = :playerId
               AND g.player_id IS NULL
               AND g.request_type = 'ERASURE'
-              AND g.status IN ('PENDING', 'PROCESSING', 'FAILED'))
+              AND (g.status IN ('PENDING', 'PROCESSING')
+                   OR (g.status = 'FAILED' AND g.retry_count < 3)))
         """, nativeQuery = true)
     boolean existsInFlightFamilyErasureRequest(@Param("playerId") Long playerId);
 

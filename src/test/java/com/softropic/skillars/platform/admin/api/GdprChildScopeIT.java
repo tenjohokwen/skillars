@@ -218,7 +218,8 @@ class GdprChildScopeIT extends AbstractIntegrationTest {
         UUID bookingId = UUID.randomUUID();
         UUID coachVideoId = UUID.randomUUID();
         transactionTemplate.execute(status -> {
-            Instant start = Instant.now().minusSeconds(7 * 86400);
+            // 30 days back: settled outside the (default 14-day) dispute window, which would otherwise hold the erasure.
+            Instant start = Instant.now().minusSeconds(30 * 86400);
             jdbcTemplate.update("INSERT INTO booking.bookings (id, coach_id, parent_id, player_id, status, "
                     + "requested_start_time, requested_end_time, version, created_at, updated_at, canonical_timezone, "
                     + "notes) VALUES (?, ?, ?, ?, 'COMPLETED', ?, ?, 0, ?, ?, 'Europe/Berlin', 'Allergic to nuts')",

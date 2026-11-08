@@ -71,7 +71,7 @@ public interface GdprRequestRepository extends JpaRepository<GdprRequest, UUID> 
                      AND p.revoked_at IS NULL AND p.expires_at > now())
             OR EXISTS (
                    SELECT 1 FROM payment.session_pack_purchase_attempts a
-                   WHERE (a.parent_id = :userId OR a.player_id IN (:playerIds))
+                   WHERE (a.parent_id = CAST(:userId AS BIGINT) OR a.player_id IN (:playerIds))
                      AND a.status IN ('IN_PROGRESS', 'UNKNOWN', 'UNRECONCILED'))
         """, nativeQuery = true)
     boolean familyHasUnusedPackCredits(@Param("userId") Long userId, @Param("playerIds") java.util.Collection<Long> playerIds);

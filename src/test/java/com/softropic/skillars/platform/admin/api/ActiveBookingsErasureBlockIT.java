@@ -247,6 +247,41 @@ class ActiveBookingsErasureBlockIT extends AbstractIntegrationTest {
         }
     }
 
+    @Test
+    void requestChildErasure_isHeldByTheSameDisputeWindowAndPackCredits() {
+        // Owner decision 2026-11-08: erasing one child from the hub cannot side-step the account-level holds.
+        String childErasureUrl = baseUrl() + "/api/gdpr/players/" + PLAYER_ID + "/erasure";
+        transactionTemplate.execute(ts -> {
+            jdbcTemplate.update("UPDATE booking.bookings SET status_changed_at = ? WHERE id = ?",
+                Timestamp.from(Instant.now().minus(2, ChronoUnit.DAYS)), completedBookingId);
+            return null;
+        });
+        String cookies = loginAndGetCookies(PARENT_EMAIL);
+        assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
+            childErasureUrl, HttpMethod.POST, null, authenticatedHeaders(cookies), Map.class))
+            .isInstanceOf(HttpClientErrorException.class)
+            .satisfies(e -> assertThat(((HttpClientErrorException) e).getResponseBodyAsString())
+                .contains("gdpr.disputeWindowOpen"));
+
+        transactionTemplate.execute(ts -> {
+            jdbcTemplate.update("UPDATE booking.bookings SET status_changed_at = ? WHERE id = ?",
+                Timestamp.from(Instant.now().minus(30, ChronoUnit.DAYS)), completedBookingId);
+            UUID tierId = UUID.randomUUID();
+            jdbcTemplate.update(
+                "INSERT INTO payment.session_pack_tiers (pack_tier_id, coach_id, session_count, total_price, price_per_session) VALUES (?, ?, 5, 200, 40)",
+                tierId, coachProfileId);
+            jdbcTemplate.update(
+                "INSERT INTO payment.session_pack_purchases (parent_id, coach_id, pack_tier_id, price_per_session, remaining_sessions, player_id, expires_at) VALUES (?, ?, ?, 40, 1, ?, ?)",
+                PARENT_USER_ID, coachProfileId, tierId, PLAYER_ID, Timestamp.from(Instant.now().plus(60, ChronoUnit.DAYS)));
+            return null;
+        });
+        assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
+            childErasureUrl, HttpMethod.POST, null, authenticatedHeaders(cookies), Map.class))
+            .isInstanceOf(HttpClientErrorException.class)
+            .satisfies(e -> assertThat(((HttpClientErrorException) e).getResponseBodyAsString())
+                .contains("gdpr.unusedPackCredits"));
+    }
+
     // ── helpers ──
 
     private void insertActiveBooking(String status) {

@@ -193,12 +193,19 @@ public class SessionPackPaymentService {
             // family whose erasure is in flight: either the erasure sees this attempt, or this sees its request.
             final String cardBefore = previousCard;
             attempt = transactionTemplate.execute(status -> {
-                lockRetryer.withBoundedRetry("SessionPackPaymentService.purchasePack", () -> {
+                PlayerProfile lockedPlayer = lockRetryer.withBoundedRetry("SessionPackPaymentService.purchasePack", () -> {
                     coachProfileRepository.findByIdForUpdate(tier.getCoachId())
                         .orElseThrow(() -> new ResourceNotFoundException("Coach profile not found", "coach_profile"));
                     return playerProfileRepository.findByIdForUpdate(playerId)
                         .orElseThrow(() -> new ResourceNotFoundException("Player profile not found", "player_profile"));
                 });
+                // A child erased, or being erased on its own (the same rule as BookingService.requirePlayerBookableUnderLock):
+                // its credits could never be booked.
+                if (lockedPlayer.getDevelopmentDataErasedAt() != null
+                        || bookingRepository.existsInFlightChildErasureRequest(playerId)) {
+                    throw new OperationNotAllowedException("Player can no longer be booked",
+                        Map.of("player id", String.valueOf(playerId)), BookingError.PLAYER_NOT_BOOKABLE);
+                }
                 if (bookingRepository.existsInFlightCoachErasureRequest(tier.getCoachId())) {
                     throw new OperationNotAllowedException("Coach account is being deleted",
                         Map.of("coach id", tier.getCoachId()), BookingError.COACH_UNAVAILABLE);
