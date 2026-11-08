@@ -30,8 +30,8 @@ These are the endpoints the Vue SPA uses (`src/frontend/src/api/auth.api.js`, `b
 | Method | Path | Auth | Purpose |
 |--------|------|------|---------|
 | POST | `/api/auth/login` | public | Email + password login. Sets `potc`, `rtkn`, `skp`. |
-| POST | `/api/auth/refresh` | public (needs `rtkn`) | Rotates the refresh token and mints a new JWT. |
-| POST | `/api/auth/logout` | public | Revokes this session's refresh-token chain, clears all auth cookies, and ends that session's access token within 5 min (`rtsid` claim, skillars-deferred-167). `204`. |
+| POST | `/api/auth/refresh` | public (needs `rtkn`) | Rotates the refresh token and mints a new JWT. `@RateLimited` 5 a minute per IP (429). |
+| POST | `/api/auth/logout` | public | Revokes this session's refresh-token chain, clears all auth cookies, and ends that session's access token within 5 min (`rtsid` claim, skillars-deferred-167). `204`. Deliberately not rate-limited. |
 | POST | `/refresh` | any authenticated role | Extends the TTL of an already-valid JWT session. Empty `200`. |
 
 ### `POST /api/auth/login`
@@ -96,6 +96,13 @@ Revokes the refresh token in the `rtkn` cookie **and every token it was rotated 
 chain is what makes Logout end a session that was refreshed a moment earlier: a single-row revoke
 could not touch the already-rotated row, so its successor used to stay live for the rest of its
 7-day TTL (skillars-deferred-166).
+
+Deliberately **not** rate-limited (skillars-deferred-180 review): it needs no credentials, so a per-IP bucket could be
+drained by anyone behind the same NAT, and a refused logout would neither revoke the chain nor clear the HttpOnly
+cookies while the SPA reports success. Its row lock is bounded anyway: once the chain is revoked, a replay is answered
+by an unlocked pre-check. `POST /api/auth/refresh`, which locks the presented row on every call, is `@RateLimited` (5 a
+minute per IP; the capacity is also the burst, so it stays well below the 25-connection pool): without it, parallel replays of one `rtkn` (anyone's own) queued on the row with a pooled connection
+each until the pool was exhausted.
 
 ### Login rate limit
 

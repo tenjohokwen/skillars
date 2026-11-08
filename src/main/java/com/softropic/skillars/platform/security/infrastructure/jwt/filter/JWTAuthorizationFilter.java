@@ -314,38 +314,31 @@ public class JWTAuthorizationFilter extends OncePerRequestFilter {
      * (skillars-deferred-144 AC8), so 5 minutes is the exposure bound — the same bound a LOCKED account
      * has always relied on. One indexed existence query, no entity loaded.
      *
-     * <p><strong>Fails OPEN on a missing claim, deliberately (AC5).</strong> A {@code null} id means the
-     * JWT was minted before this story: {@code extendTtlOfToken} rebuilds its claim map from what it can
-     * read, so it cannot invent one, and refusing every such token would sign out every live session the
-     * moment this deploys.
+     * <p><strong>Fails CLOSED on an unresolvable chain id (skillars-deferred-180).</strong> skillars-deferred-167
+     * AC5 skipped the check for a {@code null} id so that deploying it would not sign out every live session. That
+     * left a claimless token sent WITHOUT its {@code rtkn} cookie unbounded: nothing on either path consults
+     * {@code refresh_tokens} for it, so a holder making one request every {@code JWT_TTL} kept it alive past
+     * logout, expiry and the sweep. The browser binding ({@code TokenValidatorImpl.isTokenFixed}) does not stop
+     * that holder, because every value it compares (User-Agent, {@code bcookie}/{@code fcookie}, {@code ION}) is
+     * one the client sends, and a copied cookie jar carries them all. The owner chose the flip on 2026-11-08,
+     * before go-live, when no real user holds such a token.
      *
-     * <p><strong>A claimless token sent WITH its own {@code rtkn} cookie is repaired, not skipped.</strong>
+     * <p>Who is refused: a JWT with no claim whose request carries no {@code rtkn} owned by the authorized
+     * principal, and a JWT minted before V225 whose chain never rotated (its row has no id either). Every token
+     * minted since carries an id: login mints one, and a rotation of a pre-V225 row mints one for its successor.
+     *
+     * <p><strong>A claimless token sent WITH its own {@code rtkn} cookie is repaired, not refused.</strong>
      * {@link #resolveRefreshSessionId} re-derives the chain id from that cookie and the resolved value is
      * what reaches {@code renewLoginToken}, so the claim is restored for the rest of the session. That is
-     * what covers a token a rolling deploy stripped.
-     *
-     * <p><strong>A claimless token sent WITHOUT it is unbounded</strong> — not bounded by the chain's TTL,
-     * as a draft of this javadoc once claimed. There is nothing to derive from, so the check is skipped;
-     * {@code extendTtlOfToken} omits what it cannot read while CARRYING {@code dbRToken} and
-     * {@code SESSION_ISSUED_AT} forward unchanged (only {@code exp} is fresh, which is what keeps the
-     * sliding window going without advancing the DB-reauth deadline), and nothing else on either path
-     * consults {@code refresh_tokens}
-     * (skillars-deferred-144 AC8 removed the per-request lookup). So a holder who makes one request every
-     * {@code JWT_TTL} keeps that session alive indefinitely, past logout, past the chain's expiry and past
-     * the sweep. That is precisely the shape of a thief who copied a {@code potc} and nothing else, and
-     * omitting a cookie costs them nothing — so the repair narrows this gap but does not close it. The
-     * fail-closed flip is an owner decision in {@code deferred-work.md}, and it cannot be scheduled by
-     * "wait one REFRESH_TOKEN_TTL".
+     * what covers a token a rolling deploy stripped (an instance on an older release re-signs without the claim).
      *
      * <p>Throws the same exception and error code as its account-wide sibling: the client cannot act
      * differently on "your session ended" versus "your account's sessions ended", and the SPA already
      * handles this one.
      */
     private void assertSessionChainStillLive(final UUID refreshSessionId, final Principal principal) {
-        if (refreshSessionId == null) {
-            return;
-        }
-        if (!securityUtil.hasLiveRefreshTokenForSession(refreshSessionId, userIdOf(principal))) {
+        if (refreshSessionId == null
+            || !securityUtil.hasLiveRefreshTokenForSession(refreshSessionId, userIdOf(principal))) {
             throw new AuthorizationException(
                 "Session's refresh-token chain has no live token", SecurityError.ACCOUNT_NOT_LOGIN_ABLE);
         }
@@ -368,8 +361,8 @@ public class JWTAuthorizationFilter extends OncePerRequestFilter {
      * token this server signed: without that, a caller could pair their own {@code rtkn} with a victim's
      * {@code potc} and keep the victim's token passing the liveness check against their own live chain.
      *
-     * <p>Still {@code null} for a genuinely pre-V225 chain (the row has no id either), which is AC5's
-     * documented fail-open.
+     * <p>Still {@code null} for a genuinely pre-V225 chain that never rotated (the row has no id either);
+     * {@link #assertSessionChainStillLive} refuses that (skillars-deferred-180).
      */
     private UUID resolveRefreshSessionId(final HttpServletRequest req, final Principal principal) {
         final UUID claimed = loginTokenManager.extractRefreshSessionId(req);
@@ -380,10 +373,11 @@ public class JWTAuthorizationFilter extends OncePerRequestFilter {
     }
 
     /**
-     * The authorized principal's user id, or {@code null} when it cannot be read as one. A null makes both
-     * callers above fail open rather than throw: this filter runs on every authenticated request, and a
-     * principal whose {@code businessId} is unreadable is a different fault from the one this check is
-     * about.
+     * The authorized principal's user id, or {@code null} when it cannot be read as one, rather than a throw:
+     * this filter runs on every authenticated request, and a principal whose {@code businessId} is
+     * unreadable is a different fault from the one the chain check is about. With a claim, a null id makes
+     * the liveness lookup answer "live"; without one, the cookie repair finds nothing and the token is
+     * refused (skillars-deferred-180). Every principal {@code authorize} returns carries a numeric id.
      */
     private static Long userIdOf(final Principal principal) {
         if (principal == null || StringUtils.isBlank(principal.getBusinessId())) {

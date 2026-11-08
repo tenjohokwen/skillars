@@ -87,8 +87,8 @@ public class RefreshToken extends BaseEntity {
      *
      * <p>{@code NULL} on every row written before V225, which added the column with no backfill. A null id
      * means "unknown" and must never match: readers pass it as a query argument only when it is non-null,
-     * because {@code session_id = NULL} matches no row and would turn AC5's deliberate fail-open skip into
-     * a rejection. A rotation of a row whose id is null mints a FRESH id for the successor rather than
+     * because {@code session_id = NULL} matches no row and would answer "nothing live" as a side effect of
+     * a lookup (the filter refuses an unresolvable id explicitly instead, skillars-deferred-180). A rotation of a row whose id is null mints a FRESH id for the successor rather than
      * copying the null, so a pre-V225 chain acquires one on its next rotation instead of staying unmatched
      * for the rest of its life.
      *

@@ -275,8 +275,8 @@ public interface RefreshTokenRepository extends JpaRepository<RefreshToken, Long
      * (the trap that cost skillars-deferred-166 a 409 on logout). Nothing in the filter needs the row.
      *
      * <p><strong>Never call this with a null {@code sessionId}.</strong> {@code session_id = NULL} matches
-     * no row, so a null argument would report "no live token" for every pre-V225 session and reject it —
-     * the exact opposite of AC5's deliberate fail-open. The caller checks for null first.
+     * no row, so a null argument would report "no live token" as a side effect of a lookup. The caller
+     * checks for null first and refuses an unresolvable id explicitly (skillars-deferred-180).
      *
      * <p>Scoped to {@code userId} as defence in depth, not because a bypass exists today: the claim can
      * only have come from a token this server signed off that user's own row, and AC3 deliberately removed

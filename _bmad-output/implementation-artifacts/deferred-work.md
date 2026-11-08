@@ -30,7 +30,11 @@ case from `fix_pr: pending` to the PR number. Not a story yet: bundle per the us
 RS01 and RS02 (the two auth items) were implemented by **skillars-deferred-166** and deleted from this
 list per this file's "deleted outright once implemented" rule; their eval cases moved to
 `evals/review/cases/` carrying that PR's number. Item ids are the ones the original review used and do
-not renumber; the list below starts with the RS03 residuals (RS03b; RS03c-f were implemented by skillars-deferred-175/-176, RS03h-i by skillars-deferred-177). RS03 (email change / registration storing the login in the
+not renumber; the list below starts with the RS03 residuals (RS03b; RS03c-f were implemented by skillars-deferred-175/-176, RS03h-i by skillars-deferred-177). RS06c (the
+`Idempotency-Key` header is now required) and RS06d (owner decision 2026-11-08: a partial refund leaves the pack
+whole; partial = goodwill, full refund = revoke) were closed by skillars-deferred-180, and RS05b (invoice events not
+parked) was closed as accepted by the owner on 2026-11-08: the parked `customer.subscription.updated` carries the
+same status and `pastDueSince` change. RS03 (email change / registration storing the login in the
 typed case) was implemented by **skillars-deferred-172** and deleted; its eval case moved to `evals/review/cases/`.
 
 **OWNER DECIDED 2026-11-03: the next bundle after skillars-deferred-167 is the payments/Stripe cluster** —
@@ -41,36 +45,11 @@ context covers all four. RS10 + RS11 (the "a save loses data" pair) and RS03 + R
 the alternatives. RS03 went to skillars-deferred-172; RS04, RS10 and RS11 were implemented by skillars-deferred-173
 and deleted from the list below.
 
-- **[skillars-deferred-167, OWNER DECIDED 2026-11-03 (option a), IMPLEMENTATION PENDING A DATE, medium/security]** Flip the per-session JWT check from
-  fail-open to fail-closed on a missing session claim — and the trigger cannot be "wait 7 days", which is
-  what this entry first said. skillars-deferred-167 AC5 skips the check for a JWT with no `rtsid` claim,
-  because failing closed at deploy would sign out every live session and neither mint path can invent the
-  claim. **Both reviewer arms then showed the exposure is unbounded**, and a later round narrowed it without
-  closing it. As first written this entry said a claimless token never acquires a claim; that is now only
-  true of one presented WITHOUT its `rtkn` cookie. With the cookie the filter re-derives the chain id and
-  the claim is restored for the rest of that session — the repair that covers a rolling deploy stripping
-  it. Without the cookie there is nothing to derive from, the check is skipped, and a holder making one
-  request every `JWT_TTL` keeps the session alive indefinitely, past logout, expiry and the sweep.
-  **Omitting a cookie costs an attacker nothing**, so a `potc` copied before the rollout and replayed on
-  its own is still a permanent session, and the 7-day reasoning this entry originally carried was wrong.
-  **Options.** (a) Flip on a chosen date and accept that any remaining claimless holders are signed out
-  then — one-off, bounded, and the only option that actually closes it. (b) Ship a forced re-login
-  (invalidate every session once) and flip immediately after, which closes it without a surprise logout
-  later but costs every user one login now. (c) Derive the claim on the DB-reauth branch from the `rtkn`
-  cookie when the row carries one, with an ownership check against the authorized principal — narrows the
-  population but cannot help a holder who has only the `potc`, which is precisely the thief. **Recommend
-  (a)**, with the date announced; (c) adds a query and a new failure mode for partial coverage.
-  **DECIDED 2026-11-03: (a) — flip on an announced date.** Note that (c) shipped anyway for a different
-  reason (a rolling deploy strips the claim from post-deploy tokens, and re-derivation is the only repair),
-  so the remaining population is narrower than when this entry was written: only a holder presenting a
-  claimless `potc` WITHOUT the matching `rtkn` cookie. **Deliberately NOT implemented in
-  skillars-deferred-167:** the flip needs a date, which is an operational choice, and shipping it blind
-  would sign those holders out at an unannounced moment. Whoever picks the date owns inverting the
-  early return in `JWTAuthorizationFilter.assertSessionChainStillLive` and rewriting its javadoc, which
-  currently documents the fail-open as deliberate.
-
-- **[NEW STORY NEEDED, filed 2026-11-03, medium/logic]** Let an actively-used web session rotate its
-  refresh chain, so it is not logged out every `REFRESH_TOKEN_TTL`. This is the real fix for the cap
+- **[OWNER DECIDED 2026-11-08: NOT NOW, revisit after go-live; filed 2026-11-03, medium/logic]** Let an actively-used
+  web session rotate its refresh chain, so it is not logged out every `REFRESH_TOKEN_TTL`. **Decision (2026-11-08):**
+  keep the 7-day re-login and build nothing before go-live. After go-live, if users complain about being signed out
+  mid-task, first do the cheap polish (warn about a day ahead using the `rint`/chain deadline, and return to the same
+  page after the forced login); build real rotation (below) only if weekly login proves to cost users. This is the real fix for the cap
   skillars-deferred-167 shipped, and it is frontend work: a rotation call driven by a trigger an active
   session actually reaches (a timer, or the sliding-TTL path — NOT the idle-warning dialog, which a polling
   tab never sees), with real handling for the fact that every failure branch of `AuthService.refresh`
@@ -120,7 +99,9 @@ and deleted from the list below.
   bound exists to prevent. Options if it ever bites: raise the bound (it is already equal to
   `RefreshTokenRevocationService.MAX_CHAIN_HOPS` by design, so both would move), or treat
   bound-exceeded as its own outcome and answer 401 without revoking, accepting that a genuinely deep
-  replay then goes undetected too.
+  replay then goes undetected too. **OWNER DECIDED 2026-11-08: leave it** while nothing rotates (the SPA never
+  calls `POST /api/auth/refresh`); revisit before shipping any client that does. That trigger is also an item in
+  `docs/deployment/provisioning-checklist.md`.
 
 - **[skillars-deferred-166 residual, low]** `findByTokenHashForUpdate`/`findByIdForUpdate` take
   `PESSIMISTIC_WRITE` locks that WAIT without a bound. A finite `jakarta.persistence.lock.timeout` is inert
@@ -131,16 +112,30 @@ and deleted from the list below.
   `rtkn` against `POST /api/auth/refresh` and `/api/auth/logout` (both `permitAll`, unrate-limited) queue on
   the row, each holding a servlet thread and a pooled connection until the holder finishes. Unchanged by
   that story (the same rows previously queued behind `markUsedByTokenHash`'s plain `UPDATE`) and bounded in
-  practice because every holder is a short transaction. A real fix is a session `lock_timeout` on
-  application connections, or rate-limiting those two endpoints.
+  practice because every holder is a short transaction. **skillars-deferred-180 rate-limited refresh**
+  (`@RateLimited`, 5 a minute per IP, owner decision 2026-11-08): one source can park at most 5 requests on the row per
+  instance per minute (Bucket4j hands out the whole capacity at once, so the capacity is the burst), well below the
+  25-connection pool. **Latent residual (review round 3):** the bucket is per IP and spent before the cookie is read, so
+  anyone behind the same NAT can drain it with cookieless calls and block every other user's rotation there. Nothing
+  rotates today (the SPA never calls refresh); revisit together with `MAX_GRACE_HOPS` before shipping a client that does
+  (a per-token bucket needs a per-IP guard too, or random cookies mint unbounded buckets). Logout was left unlimited after
+  review: a per-IP bucket on an unauthenticated endpoint can be drained by anyone behind the same NAT, and a refused
+  logout revokes nothing while the SPA reports success. Logout's queue is bounded by the unlocked already-revoked
+  pre-check (only the first parallel burst on a live chain reaches the lock; the same holds for the Spring
+  `POST /api/logout`). **Still open:** a many-source flood on refresh (per-IP buckets, per JVM), and that first burst on
+  logout. The follow-up, if the edge proxy ends up without rate limiting, is `SET LOCAL lock_timeout` at the start of the
+  refresh and logout transactions (not connection-wide: that would change every locking query); a logout that times
+  out then needs its own handling.
 
 - RS03b [medium/security] Lost old mailbox and forgotten password: no self-service recovery. An email change can be
   undone only from the old address (skillars-deferred-172), and a password reset goes to the account's current
   address; someone who lost access to the old mailbox and whose account was taken over needs a support/admin path
-  that does not exist. Owner decision (2026-11-05): out of scope for 172, needs its own design.
-- RS05b [medium/concurrency] `invoice.paid` (a silent no-op without a local row) and `invoice.payment_failed` have the same race shape as the subscription events skillars-deferred-169 now parks, and are not parked. Left on purpose: they carry no state the signup does not re-derive from the Stripe subscription it just created.
-- RS06c [low/logic] The `Idempotency-Key` header is still optional on the pack purchase endpoint: a keyless request gets a server-minted attempt key, so it is serialised by the open-attempt index but has no client dedup (today's behaviour). Requiring the header is a contract change for every client.
-- RS06d [low/logic] A pack purchase whose PaymentIntent is only PARTIALLY refunded is treated as captured and the pack is created (logged `[PACK_PURCHASE_PARTIAL_REFUND]`). Policy call, never decided by the owner.
+  that does not exist. Owner decision (2026-11-05): out of scope for 172, needs its own design. **OWNER DECIDED 2026-11-08 (option B):**
+  an audited admin "recover account" action, as its own story: set a new email address verified by a link sent to it,
+  revoke every session, clear the password and send a reset link, and notify the old address and the verified phone,
+  all in one audited step; plus a runbook with the identity checks support must make before using it (Stripe card
+  last four digits and a past payment date, booking history, coach or player names). Rejected: a SQL-only runbook
+  (no audit, error-prone) and SMS self-service recovery (SIM swap).
 - RS09e [low/logic] The declined-card revert is still compensation (skillars-deferred-174 kept it): a crash between a refused pack charge and `revertDeclinedCard` leaves the attempted card saved (no outbox carries the revert). Reachable only by API clients that name a card, and the card is the payer's own (174 AC1).
 - RS09f [low/concurrency] `StripeCustomerRepository.revertPaymentMethod` matches by value, so a payer who re-saves the SAME card while a pack purchase with it is being refused loses that save (174 D2 option 1 accepted this instead of a `payment_method_version` column). The success-side re-apply (`reapplyPaymentMethod`) has the same ambiguity the other way: a payer who re-saves the PREVIOUS card while the purchase is in flight has it overwritten by the attempted card, and the subscriptions follow (174 PR review). API clients only.
 - RS03g [low/edge-case] Residual of RS03e (skillars-deferred-176 compares the user's email read before a Stripe customer is created with the one after its `stripe_customers` row is saved, and enqueues a sync if it changed): an email-change transaction that began before the email was first read and commits after the second read is still missed, since its listener saw no customer row and both reads saw the old address. Closing it needs one transaction around the whole customer creation, which includes a Stripe call; not worth a lock on the purchase path.

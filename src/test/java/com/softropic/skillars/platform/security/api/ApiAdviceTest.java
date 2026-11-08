@@ -188,4 +188,33 @@ class ApiAdviceTest {
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
         assertThat(response.getBody().getErrorMsg().errorKey()).isEqualTo("generic.dataError");
     }
+
+    /**
+     * skillars-deferred-180 (review round 2): an empty {@code @RateLimited} bucket resolves to its own 429 handler, not the
+     * generic AuthorizationException 401 one (which made the SPA read a throttle as an ended session). Resolved the way
+     * Spring MVC resolves it, so a handler that exists but loses to the parent type would fail here.
+     */
+    @Test
+    void requestRateLimited_resolvesToThe429Handler_notTheGeneric401() {
+        java.lang.reflect.Method handler = new org.springframework.web.method.annotation.ExceptionHandlerMethodResolver(
+            ApiAdvice.class).resolveMethod(new com.softropic.skillars.infrastructure.security.RequestRateLimitedException("x"));
+
+        assertThat(handler).isNotNull();
+        assertThat(handler.getName()).isEqualTo("requestRateLimitedHandler");
+        assertThat(handler.getAnnotation(ResponseStatus.class).value()).isEqualTo(HttpStatus.TOO_MANY_REQUESTS);
+
+        ErrorDto body = apiAdvice.requestRateLimitedHandler(
+            new com.softropic.skillars.infrastructure.security.RequestRateLimitedException("x"));
+        assertThat(body.getErrorMsg().errorKey()).isEqualTo("security.tooManyRequests");
+    }
+
+    /** And a plain AuthorizationException still gets the 401 handler. */
+    @Test
+    void plainAuthorizationException_stillResolvesToThe401Handler() {
+        java.lang.reflect.Method handler = new org.springframework.web.method.annotation.ExceptionHandlerMethodResolver(
+            ApiAdvice.class).resolveMethod(new com.softropic.skillars.infrastructure.security.AuthorizationException(
+                "x", com.softropic.skillars.infrastructure.security.SecurityError.ACCOUNT_NOT_LOGIN_ABLE));
+
+        assertThat(handler.getAnnotation(ResponseStatus.class).value()).isEqualTo(HttpStatus.UNAUTHORIZED);
+    }
 }

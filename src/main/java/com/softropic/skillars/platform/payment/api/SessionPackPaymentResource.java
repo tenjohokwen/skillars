@@ -74,13 +74,17 @@ public class SessionPackPaymentResource {
     @PreAuthorize(SecurityConstants.HAS_PARENT_OR_PLAYER_ROLE)
     public ResponseEntity<SessionPackPurchaseResponse> purchaseSessionPack(
             @Valid @RequestBody PurchaseSessionPackRequest request,
-            // fix/payment-session-pack-integrity: one key per purchase attempt, so a double-submit dedupes
-            // to the same charge and pack. Optional — the service generates one when absent.
+            // fix/payment-session-pack-integrity: one key per purchase attempt, so a double-submit or a retry after
+            // a lost response dedupes to the same charge and pack. Required since skillars-deferred-180 (RS06c): a
+            // keyless retry of a purchase whose response was lost would buy a second pack. Checked here rather than
+            // with required = true so a missing header answers our own error code, not Spring's generic 400.
             @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey) {
+        if (idempotencyKey == null || idempotencyKey.isBlank()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "payment.idempotencyKeyRequired");
+        }
         Long parentId = securityUtil.getCurrentCoachUserId();
         SessionPackPurchaseResponse response = sessionPackPaymentService.purchasePack(
-            parentId, request.packTierId(), request.playerId(), request.paymentMethodId(),
-            idempotencyKey == null || idempotencyKey.isBlank() ? null : idempotencyKey.strip());
+            parentId, request.packTierId(), request.playerId(), request.paymentMethodId(), idempotencyKey.strip());
         return ResponseEntity.status(HttpStatus.CREATED).body(response);
     }
 
