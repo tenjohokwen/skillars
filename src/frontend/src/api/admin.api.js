@@ -9,7 +9,11 @@ export const adminApi = {
   getHealth() {
     // Actuator is on a different port (8367) than the main app (9990).
     const actuatorBase = `${window.location.protocol}//${window.location.hostname}:8367`
-    return api.get(`${actuatorBase}/manage/health`)
+    // A DOWN report comes back as 503 with the same body: that is the answer, not a server error,
+    // so it is not routed through the global error handler (found by Pitchside OPS-06).
+    return api.get(`${actuatorBase}/manage/health`, {
+      validateStatus: (status) => status === 200 || status === 503,
+    })
   },
 
   // skillars-deferred-165 AC1/AC3: admin disputes worklist, mirroring AdminModerationResource's

@@ -106,6 +106,8 @@ docker compose exec app wget -qO- http://localhost:8367/manage/health/notificati
 docker compose logs app | grep -E "AppSetupException|STARTUP ABORTED|MEDIA_SCANNING_UNSAFE|config.value.misconfigured"   # nothing
 ```
 
+As an admin, the System Health page lists `storage` as UP (the app reaches its bucket; the `/manage/health/storage` detail is admin-only). It counts towards the overall status, not towards the `smoke` liveness check.
+
 Then the SES preflight (`ready: true`), a Stripe test delivery to each endpoint (200), Grafana at `https://<MONITORING_DOMAIN>` with the alert rules healthy,
 and the [section 9](#9-release-and-post-deploy-smoke-tests) smoke tests.
 

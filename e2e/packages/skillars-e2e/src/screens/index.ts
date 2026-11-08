@@ -138,6 +138,21 @@ export class ReliabilityScreen extends Screen {
     this.page.locator(`[data-testid="reliability-strike"][data-booking-id="${bookingId}"]`)
   reason = (strike: Locator) => this.within(strike, 'reliability-strike-reason')
   noStrikes = () => this.tid('reliability-no-strikes')
+  acknowledge = (strike: Locator) => this.within(strike, 'reliability-acknowledge-btn')
+  appeal = (strike: Locator) => this.within(strike, 'appeal-open-btn')
+}
+
+/** /admin/health-dashboard: the overall status, and per-component cards for a full admin. */
+export class HealthDashboardScreen extends Screen {
+  readonly route = R.adminHealth
+  readonly readyTestId = 'health-status'
+  status = () => this.tid('health-status')
+  accessDenied = () => this.tid('health-access-denied')
+  components = () => this.tid('health-component')
+  component = (name: string) =>
+    this.page.locator(`[data-testid="health-component"][data-name="${name}"]`)
+  componentStatus = (card: Locator) => this.within(card, 'health-component-status')
+  details = (card: Locator) => this.within(card, 'health-detail')
 }
 
 export class ParentDashboardScreen extends Screen {

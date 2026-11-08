@@ -1820,6 +1820,26 @@ export class Provisioner {
     )
   }
 
+  // ─── Suite N: reliability ────────────────────────────────────────────────────────────────────
+
+  /**
+   * SQL seam: a reliability strike of a given kind, `daysAgo` days old. Strikes come from no-shows and
+   * cancellations (suite O drives those); this sets two kinds side by side cheaply.
+   */
+  async seedStrike(
+    coach: CoachAccount,
+    reason: 'COACH_NO_SHOW' | 'COACH_CANCELLATION_UNEXCUSED' | 'COACH_CANCELLATION_EXCUSED_LIMIT',
+    daysAgo = 1,
+  ): Promise<string> {
+    const sql = await this.sql()
+    const [row] = await sql.query<{ id: string }>(
+      `INSERT INTO marketplace.coach_reliability_strikes (coach_id, reason, created_at)
+       VALUES ($1::uuid, $2, now() - make_interval(days => $3::int)) RETURNING id`,
+      [coach.coachId, reason, daysAgo],
+    )
+    return row!.id
+  }
+
   private api(context: APIRequestContext): ApiClient {
     return new ApiClient(context, { baseUrl: API_BASE_URL, requestIdPrefix: 'e2e-provision' })
   }
