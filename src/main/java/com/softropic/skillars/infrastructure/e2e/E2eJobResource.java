@@ -2,6 +2,7 @@ package com.softropic.skillars.infrastructure.e2e;
 
 import com.softropic.skillars.infrastructure.exception.AppSetupException;
 import com.softropic.skillars.infrastructure.security.SecurityConstants;
+import com.softropic.skillars.platform.booking.service.BookingReminderScheduler;
 import com.softropic.skillars.platform.booking.service.StuckCompletionSweeperService;
 import com.softropic.skillars.platform.booking.service.UnresolvedSessionSweeperService;
 import com.softropic.skillars.platform.payment.service.SessionPackForfeitureScheduler;
@@ -31,7 +32,7 @@ import java.util.Set;
 /**
  * Pitchside UI suite only: runs one scheduled job now, so a spec can see what the job does without waiting for
  * its schedule (the pack forfeiture runs hourly; the unresolved-session sweeper, which auto-refunds a session
- * nobody started 48 hours after its start, every five minutes). Thresholds stay real: a spec seeds state that is already due
+ * nobody started 48 hours after its start, every five minutes; the booking reminders, every five minutes). Thresholds stay real: a spec seeds state that is already due
  * (an expiry in the past), then asks for the run.
  * <p>
  * Each job runs under its own ShedLock name, so it never overlaps the scheduled run or another trigger. The lock
@@ -64,19 +65,23 @@ public class E2eJobResource {
     public E2eJobResource(Environment environment, LockProvider lockProvider,
                           SessionPackForfeitureScheduler packForfeiture,
                           UnresolvedSessionSweeperService unresolvedSessions,
-                          StuckCompletionSweeperService stuckCompletions) {
+                          StuckCompletionSweeperService stuckCompletions,
+                          BookingReminderScheduler bookingReminders) {
         this.environment = environment;
         this.lockingTaskExecutor = new DefaultLockingTaskExecutor(lockProvider);
         SessionPackForfeitureScheduler forfeiture = target(packForfeiture);
         UnresolvedSessionSweeperService sweeper = target(unresolvedSessions);
         StuckCompletionSweeperService stuck = target(stuckCompletions);
+        BookingReminderScheduler reminders = target(bookingReminders);
         this.jobs = Map.of(
             "pack-forfeiture", new Job("SessionPackForfeitureScheduler_expire", Duration.ofMinutes(15),
                 forfeiture::forfeitExpiredPacks),
             "unresolved-sessions", new Job("UnresolvedSessionSweeperService_sweep", Duration.ofMinutes(15),
                 sweeper::sweep),
             "stuck-completions", new Job("StuckCompletionSweeperService_processStuckCompletions",
-                Duration.ofMinutes(15), stuck::processStuckCompletions));
+                Duration.ofMinutes(15), stuck::processStuckCompletions),
+            "booking-reminders", new Job("BookingReminderScheduler_remind", Duration.ofMinutes(15),
+                reminders::processReminderWindows));
     }
 
     @PostConstruct

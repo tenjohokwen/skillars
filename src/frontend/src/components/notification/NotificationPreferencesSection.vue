@@ -16,12 +16,14 @@
         :model-value="pref.emailEnabled"
         :disable="saving === pref.category"
         :aria-label="labelFor(pref.category).label"
-        :data-testid="`pref-toggle-${pref.category}`"
+        :data-testid="`pref-toggle-${pref.category.toLowerCase()}`"
         @update:model-value="(v) => toggle(pref, v)"
       />
     </div>
 
-    <div class="text-meta q-mt-md">{{ t('notifications.preferences.transactionalNote') }}</div>
+    <div class="text-meta q-mt-md" data-testid="pref-transactional-note">
+      {{ t('notifications.preferences.transactionalNote') }}
+    </div>
   </div>
 </template>
 

@@ -37,8 +37,8 @@ describe('NotificationPreferencesSection.vue', () => {
       { category: 'DEVELOPMENT', emailEnabled: false },
     ])
 
-    expect(wrapper.find('[data-testid="pref-toggle-REMINDER"]').exists()).toBe(true)
-    expect(wrapper.find('[data-testid="pref-toggle-DEVELOPMENT"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="pref-toggle-reminder"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="pref-toggle-development"]').exists()).toBe(true)
     expect(wrapper.text()).toContain('notifications.preferences.transactionalNote')
   })
 

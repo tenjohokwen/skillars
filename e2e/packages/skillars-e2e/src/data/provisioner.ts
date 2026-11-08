@@ -521,9 +521,11 @@ export class Provisioner {
    * `stuck-completions` force-completes a Quick Complete whose wrap-up never came
    * (`booking.stuck_completion_timeout_hours` after its last update): COMPLETED, attendance not
    * recorded, no recap.
+   * `booking-reminders` sends the day-before reminder for every CONFIRMED booking starting within
+   * `platform.reminder_interval_primary_hours` (24) and moves it to UPCOMING, and the two-hours-before one.
    */
   async runJob(
-    name: 'pack-forfeiture' | 'unresolved-sessions' | 'stuck-completions',
+    name: 'pack-forfeiture' | 'unresolved-sessions' | 'stuck-completions' | 'booking-reminders',
     timeoutMs = 180_000,
   ): Promise<void> {
     const session = await this.login({ email: E2E.adminEmail, password: E2E.adminPassword })
@@ -1820,5 +1822,79 @@ export class Provisioner {
 
   private api(context: APIRequestContext): ApiClient {
     return new ApiClient(context, { baseUrl: API_BASE_URL, requestIdPrefix: 'e2e-provision' })
+  }
+
+  // ─── Suite P: notifications ──────────────────────────────────────────────────────────────────
+
+  /**
+   * `count` inbox rows for a user, newest first one minute apart, as the email pipeline writes them
+   * (a BOOKING_CONFIRMED with a coach name, deep-linking to the parent's bookings). The first `read`
+   * of them, counting from the newest, are already read. SQL seam: the product writes a row only
+   * alongside an email, one per event.
+   */
+  async seedNotifications(
+    user: { userId: string },
+    count: number,
+    options: { read?: number; coachName?: string } = {},
+  ): Promise<void> {
+    const sql = await this.sql()
+    await sql.query(
+      `INSERT INTO main.user_notifications
+              (recipient_user_id, category, type, params, deep_link, created_at, read_at)
+       SELECT $1::bigint, 'BOOKING', 'BOOKING_CONFIRMED',
+              jsonb_build_object('coachDisplayName', $4::text || ' ' || n),
+              '/parent/bookings', now() - n * interval '1 minute',
+              CASE WHEN n <= $3::int THEN now() ELSE NULL END
+         FROM generate_series(1, $2::int) AS n`,
+      [user.userId, count, options.read ?? 0, options.coachName ?? 'Coach'],
+    )
+  }
+
+  /** How many of a user's inbox rows are unread, read straight from the table. */
+  async unreadNotifications(user: { userId: string }): Promise<number> {
+    const sql = await this.sql()
+    const [row] = await sql.query<{ n: string }>(
+      `SELECT count(*)::text AS n FROM main.user_notifications
+        WHERE recipient_user_id = $1::bigint AND read_at IS NULL`,
+      [user.userId],
+    )
+    return Number(row?.n ?? 0)
+  }
+
+  /**
+   * Move a booking's start to `hoursFromNow` hours ahead without marking it reminded (setBooking
+   * does mark it), so the reminder job picks it up. The original start moves with it.
+   */
+  async startBookingIn(bookingId: string, hoursFromNow: number): Promise<void> {
+    const start = new Date(Date.now() + hoursFromNow * 3_600_000)
+    start.setUTCSeconds(0, 0)
+    const end = new Date(start.getTime() + 3_600_000)
+    const sql = await this.sql()
+    const rows = await sql.query(
+      `UPDATE booking.bookings
+          SET requested_start_time = $2::timestamptz, requested_end_time = $3::timestamptz,
+              original_start_time = CASE WHEN original_start_time IS NULL THEN NULL ELSE $2::timestamptz END
+        WHERE id = $1::uuid
+        RETURNING id`,
+      [bookingId, start.toISOString(), end.toISOString()],
+    )
+    if (rows.length !== 1) throw new Error(`No booking ${bookingId}`)
+  }
+
+  /**
+   * The send pipeline's record of a template's email to an address (main.envelope_entity), once it
+   * has been processed: SENT also covers an email dropped by the recipient's preference, which reaches
+   * no mailbox. undefined while it is still queued.
+   */
+  async emailStatus(to: string, template: string): Promise<string | undefined> {
+    const sql = await this.sql()
+    const [row] = await sql.query<{ status: string }>(
+      `SELECT e.status FROM main.envelope_entity e
+         JOIN main.envelope_entity_recipients r ON r.envelope_entity_id = e.id
+        WHERE e.email_template = $2 AND lower(r.email) = lower($1)
+        ORDER BY e.deadline DESC NULLS LAST LIMIT 1`,
+      [to, template],
+    )
+    return row?.status
   }
 }
