@@ -1,6 +1,6 @@
 # Story skillars-deferred-177: GDPR erasure × Stripe residuals (refuse an erased payer, sweep missed Stripe erasures)
 
-Status: in-progress
+Status: review
 
 <!-- CREATED 2026-11-08 from deferred-work.md (RS section): RS03h and RS03i, both filed by skillars-deferred-176's PR review
      round 7. Chosen autonomously (owner instruction 2026-11-08: "continue with the next story ... work autonomously"):
@@ -126,3 +126,5 @@ Claude Opus 5.5 (claude-opus-5-5)
   (`StripeCustomerRepository.insertIfAbsent`, `ON CONFLICT DO NOTHING`): `save()` merges on this assigned-id entity, so a
   second first-creation request that ran after the first committed overwrote that row and orphaned its customer (both
   reviewers, medium). The post-creation check fails closed when its `FOR SHARE` read fails (security reviewer).
+- 2026-11-08: `/pr-review` round 5 (021bf4bb): general reviewer clean; one security-reviewer finding outside its category
+  (a failed orphan-customer erasure enqueue is only logged), ledgered as RS03k with a monitoring.md step. Status -> review; PR opened.
