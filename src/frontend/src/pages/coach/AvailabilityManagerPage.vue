@@ -99,6 +99,7 @@
                 color="primary"
                 :label="t('common.save')"
                 :loading="saving"
+                data-testid="availability-window-save"
                 @click="onSaveWindow"
               />
               <q-btn v-if="editingWindow" flat :label="t('common.cancel')" @click="cancelEdit" />
@@ -108,7 +109,12 @@
           <q-banner v-if="windowSaved" rounded class="q-mt-sm bg-positive text-white">
             {{ t('booking.availability.windowAdded') }}
           </q-banner>
-          <q-banner v-if="saveError" rounded class="q-mt-sm bg-negative text-white">
+          <q-banner
+            v-if="saveError"
+            rounded
+            class="q-mt-sm bg-negative text-white"
+            data-testid="availability-window-error"
+          >
             {{ saveError }}
           </q-banner>
         </div>

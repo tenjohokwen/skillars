@@ -194,11 +194,11 @@ const DYNAMIC_KEY_CALL_SITES = [
       't() on payment.error.<code> for a server-supplied payment.* errorKey, after a te() probe',
   },
   {
-    at: 'src/pages/coach/CoachCommandCenterPage.vue:891',
+    at: 'src/pages/coach/CoachCommandCenterPage.vue:907',
     reason: 'notify message keyed by a successMessage key chosen earlier in the handler',
   },
   {
-    at: 'src/pages/coach/CoachCommandCenterPage.vue:902',
+    at: 'src/pages/coach/CoachCommandCenterPage.vue:918',
     reason: 'notify message keyed by a messageKey chosen earlier in the handler',
   },
   {
@@ -258,7 +258,7 @@ const DYNAMIC_KEY_CALL_SITES = [
       'subscribe error: subscriptionErrorI18nKey maps a backend code to subscription.errors.*',
   },
   {
-    at: 'src/pages/marketplace/CoachPublicProfilePage.vue:230',
+    at: 'src/pages/marketplace/CoachPublicProfilePage.vue:262',
     reason: "label keyed by the review-eligibility response's own reasonCode enum",
   },
   {
@@ -322,12 +322,12 @@ const DYNAMIC_KEY_CALL_SITES = [
       'subject-summary field label: te()-guarded admin.appeals.subjectField.<backend map key>, raw key fallback',
   },
   {
-    at: 'src/pages/parent/ParentBookingsPage.vue:660',
+    at: 'src/pages/parent/ParentBookingsPage.vue:661',
     reason:
       't on a lookup-table value mapping a backend errorKey to a real no-show copy key, with a literal fallback',
   },
   {
-    at: 'src/pages/parent/ParentBookingsPage.vue:700',
+    at: 'src/pages/parent/ParentBookingsPage.vue:701',
     reason:
       't on a lookup-table value mapping a backend errorKey to a real proposal/withdraw copy key, with a literal-key fallback argument',
   },
