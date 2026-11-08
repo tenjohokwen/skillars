@@ -1051,6 +1051,54 @@ class SessionPackPaymentServiceTest {
             .anyMatch(e -> e.getFormattedMessage().startsWith("[PACK_PURCHASE_LATE_CAPTURE]"));
     }
 
+    /** Review round 3: an unknown outcome on a NO_CHARGE attempt reopens it, so Stripe decides instead of "not charged". */
+    @Test
+    void purchasePack_outcomeUnknownOnANoChargeAttempt_reopensItForTheResolver_noAlert() {
+        stubPurchaseWithExistingCustomer(makeActiveTier(), "pm_old");
+        when(paymentGateway.chargeAndCapture(any(), any(), any(), any(), anyString(), any()))
+            .thenThrow(new com.softropic.skillars.platform.payment.contract.exception.ChargeOutcomeUnknownException("pack-key", null));
+        var UNKNOWN = com.softropic.skillars.platform.payment.repo.SessionPackPurchaseAttempt.Status.UNKNOWN;
+        var NO_CHARGE = com.softropic.skillars.platform.payment.repo.SessionPackPurchaseAttempt.Status.NO_CHARGE;
+        var IN_PROGRESS = com.softropic.skillars.platform.payment.repo.SessionPackPurchaseAttempt.Status.IN_PROGRESS;
+        when(attemptRepository.transition(any(), eq(UNKNOWN), any(), eq(java.util.Set.of(IN_PROGRESS)))).thenReturn(false);
+        when(attemptRepository.transition(any(), eq(UNKNOWN), any(), eq(java.util.Set.of(NO_CHARGE)))).thenReturn(true);
+        when(attemptRepository.existsByIdAndStatus(1L, NO_CHARGE)).thenReturn(true);
+
+        ch.qos.logback.classic.Logger logger = (ch.qos.logback.classic.Logger) org.slf4j.LoggerFactory.getLogger(SessionPackPaymentService.class);
+        ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent> logs = new ch.qos.logback.core.read.ListAppender<>();
+        logs.start();
+        logger.addAppender(logs);
+        try {
+            assertThatThrownBy(() -> sessionPackPaymentService.purchasePack(PARENT_ID, TIER_ID, PLAYER_ID, null, KEY))
+                .isInstanceOf(com.softropic.skillars.platform.payment.contract.exception.ChargeOutcomeUnknownException.class);
+        } finally {
+            logger.detachAppender(logs);
+        }
+
+        verify(attemptRepository).transition(any(), eq(UNKNOWN), any(), eq(java.util.Set.of(NO_CHARGE)));
+        org.assertj.core.api.Assertions.assertThat(logs.list)
+            .noneMatch(e -> e.getFormattedMessage().startsWith("[PACK_PURCHASE_LATE_CAPTURE]"));
+    }
+
+    /** Review round 3: a failing winner re-read never replaces the ownership refusal. */
+    @Test
+    void purchasePack_ownershipRefusedAndTheWinnerReReadFails_isStillTheRefusal() {
+        PlayerProfile player = new PlayerProfile();
+        player.setId(PLAYER_ID);
+        player.setUserId(PARENT_ID);
+        when(playerProfileRepository.findById(PLAYER_ID)).thenReturn(Optional.of(player));
+        when(sessionPackTierRepository.findById(TIER_ID)).thenReturn(Optional.of(makeActiveTier()));
+        when(stripeCustomerRepository.findById(PARENT_ID)).thenReturn(Optional.of(existingCustomerWithCard("pm_old")));
+        when(paymentGateway.paymentMethodBelongsTo("cus_test", "pm_foreign")).thenReturn(false);
+        when(attemptRepository.findByParentIdAndAttemptKey(PARENT_ID, KEY))
+            .thenReturn(Optional.empty())
+            .thenThrow(new org.springframework.dao.QueryTimeoutException("pool timeout"));
+
+        assertThatThrownBy(() -> sessionPackPaymentService.purchasePack(PARENT_ID, TIER_ID, PLAYER_ID, "pm_foreign", KEY))
+            .isInstanceOf(org.springframework.web.server.ResponseStatusException.class)
+            .hasMessageContaining("payment.paymentMethodNotOwned");
+    }
+
     @Test
     void purchasePack_unclassifiedRuntimeException_isUnknown_notLeftInProgress() {
         stubPurchaseWithExistingCustomer(makeActiveTier(), "pm_old");

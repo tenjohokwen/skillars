@@ -190,7 +190,13 @@ public class SessionPackPaymentService {
                 // skillars-deferred-178 (RS06j): a same-key request that raced this one may have inserted the attempt since
                 // the replay check above; it is answered from that attempt, as a later retry would be.
                 if (attemptKey != null) {
-                    Optional<SessionPackPurchaseAttempt> winner = attemptRepository.findByParentIdAndAttemptKey(parentId, attemptKey);
+                    final Optional<SessionPackPurchaseAttempt> winner;
+                    try {
+                        winner = attemptRepository.findByParentIdAndAttemptKey(parentId, attemptKey);
+                    } catch (RuntimeException rereadFailed) {
+                        e.addSuppressed(rereadFailed); // review round 3: the refusal, not the re-read's failure, answers
+                        throw e;
+                    }
                     if (winner.isPresent()) {
                         return answerKnownAttempt(winner.get(), parentId, packTierId, playerId);
                     }
@@ -709,9 +715,18 @@ public class SessionPackPaymentService {
         try {
             // Review round 2: only NO_CHARGE; the resolver may also have moved it to UNKNOWN or SUCCEEDED, which is tracked.
             if (attemptRepository.existsByIdAndStatus(a.getId(), Status.NO_CHARGE)) {
-                lateCapture(a.getId(), a.getParentId(), "unknown (charge outcome unknown)");
+                // Review round 3: reopen it, so the resolver and a same-key retry decide from Stripe instead of answering
+                // "not charged". The open-attempt index refuses this when the parent has started another purchase since;
+                // then only an operator can tell, so it is alerted.
+                if (attemptRepository.transition(a.getId(), Status.UNKNOWN, null, Set.of(Status.NO_CHARGE))) {
+                    log.warn("[PACK_PURCHASE_ATTEMPT_REOPENED] attemptId={} parentId={} — charge outcome unknown on an attempt "
+                        + "judged uncharged; the resolver decides it from Stripe", a.getId(), a.getParentId());
+                } else {
+                    lateCapture(a.getId(), a.getParentId(), "unknown (charge outcome unknown)");
+                }
             }
         } catch (RuntimeException e) {
+            lateCapture(a.getId(), a.getParentId(), "unknown (charge outcome unknown; reopening failed)");
             // Never replaces the charge's own exception, which the caller is about to rethrow.
             log.error("[PACK_PURCHASE_CAS_LOST] could not re-read the attempt after an unknown outcome: attemptId={}", a.getId(), e);
         }

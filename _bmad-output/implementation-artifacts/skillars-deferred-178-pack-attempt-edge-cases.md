@@ -115,3 +115,7 @@ Claude Opus 5.5 (claude-opus-5-5)
   the newest match created in the lookup window; the late-capture alert after an unknown outcome fires only on NO_CHARGE
   (both reviewers); its status read is guarded; the closed-by-the-resolver check also runs before the card write, so a stale
   request never writes or reverts a card a later purchase may own (general). RS06l filed.
+- 2026-11-08: `/pr-review` round 3 (2c38658f): security clean. An unknown charge outcome on a NO_CHARGE attempt now reopens
+  it as UNKNOWN so the resolver and a same-key retry decide from Stripe (the open-attempt index refuses it when the parent
+  bought again, and then the alert fires; IT); a failing winner re-read keeps the ownership refusal. The stale-card-write
+  window (RS09f's value match) is added to RS06k.
