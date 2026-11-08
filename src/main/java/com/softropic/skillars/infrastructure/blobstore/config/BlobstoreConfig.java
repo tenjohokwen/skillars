@@ -14,6 +14,8 @@ import software.amazon.awssdk.auth.credentials.AwsBasicCredentials;
 import software.amazon.awssdk.auth.credentials.AwsCredentialsProvider;
 import software.amazon.awssdk.auth.credentials.DefaultCredentialsProvider;
 import software.amazon.awssdk.auth.credentials.StaticCredentialsProvider;
+import software.amazon.awssdk.core.checksums.RequestChecksumCalculation;
+import software.amazon.awssdk.core.checksums.ResponseChecksumValidation;
 import software.amazon.awssdk.http.apache.ApacheHttpClient;
 import software.amazon.awssdk.regions.Region;
 import software.amazon.awssdk.services.s3.S3AsyncClient;
@@ -77,11 +79,20 @@ public class BlobstoreConfig {
             ExecutorShutdown.STORAGE_UPLOAD_SECONDS);
     }
 
+    // Every client below sends a checksum only when an operation requires one (WHEN_REQUIRED). Since SDK 2.30
+    // the default (WHEN_SUPPORTED) streams each upload as aws-chunked content with a trailing CRC, and
+    // SeaweedFS 3.97, our storage service in every compose file, stored that framing as the object itself: a
+    // GDPR export downloaded as "28c;chunk-signature=..." followed by the ZIP, and every other server-side
+    // putObject was corrupted the same way. Plain bodies are what any S3-compatible store accepts; the
+    // request is still SigV4-signed, and responses are not validated against a checksum the store may
+    // not return.
     @Bean
     @ConditionalOnProperty(name = "app.storage.provider", havingValue = "s3", matchIfMissing = true)
     public S3Client s3Client(BlobstoreProperties properties) {
         return S3Client.builder()
             .endpointOverride(URI.create(properties.getEndpointUrl()))
+            .requestChecksumCalculation(RequestChecksumCalculation.WHEN_REQUIRED)
+            .responseChecksumValidation(ResponseChecksumValidation.WHEN_REQUIRED)
             .credentialsProvider(credentialsProvider(properties))
             .region(Region.of(properties.getS3().getRegion()))
             .serviceConfiguration(S3Configuration.builder()
@@ -100,6 +111,8 @@ public class BlobstoreConfig {
     public S3AsyncClient s3AsyncClient(BlobstoreProperties properties) {
         return S3AsyncClient.builder()
             .endpointOverride(URI.create(properties.getEndpointUrl()))
+            .requestChecksumCalculation(RequestChecksumCalculation.WHEN_REQUIRED)
+            .responseChecksumValidation(ResponseChecksumValidation.WHEN_REQUIRED)
             .credentialsProvider(credentialsProvider(properties))
             .region(Region.of(properties.getS3().getRegion()))
             .serviceConfiguration(S3Configuration.builder()
@@ -151,6 +164,8 @@ public class BlobstoreConfig {
         BlobstoreProperties.Replication.Backup b = properties.getReplication().getBackup();
         return S3Client.builder()
             .endpointOverride(URI.create(b.getEndpointUrl()))
+            .requestChecksumCalculation(RequestChecksumCalculation.WHEN_REQUIRED)
+            .responseChecksumValidation(ResponseChecksumValidation.WHEN_REQUIRED)
             .credentialsProvider(backupCredentialsProvider(properties))
             .region(Region.of(b.getRegion()))
             .serviceConfiguration(S3Configuration.builder()
@@ -170,6 +185,8 @@ public class BlobstoreConfig {
         BlobstoreProperties.Replication.Backup b = properties.getReplication().getBackup();
         return S3AsyncClient.builder()
             .endpointOverride(URI.create(b.getEndpointUrl()))
+            .requestChecksumCalculation(RequestChecksumCalculation.WHEN_REQUIRED)
+            .responseChecksumValidation(ResponseChecksumValidation.WHEN_REQUIRED)
             .credentialsProvider(backupCredentialsProvider(properties))
             .region(Region.of(b.getRegion()))
             .serviceConfiguration(S3Configuration.builder()
