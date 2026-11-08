@@ -26,6 +26,23 @@ public class VideoSharingPolicy {
     private final VideoProperties properties;
     private final VideoModerationScanRepository scanRepository;
 
+    /**
+     * The videos among {@code videos} that may be shared past their uploader, with one scan query for
+     * the whole list (a per-video {@link #maySharePastOwner} would be N+1).
+     */
+    public java.util.List<Video> shareable(java.util.List<Video> videos) {
+        if (!properties.getModeration().isRequiresRealScanner() || videos.isEmpty()) {
+            return videos;
+        }
+        java.util.Set<java.util.UUID> passed = scanRepository
+            .findByVideoIdInAndOutcome(videos.stream().map(Video::getId).toList(), PASSED)
+            .stream()
+            .filter(scan -> SCANNER_LAYER.equals(scan.getLayer()))
+            .map(scan -> scan.getVideoId())
+            .collect(java.util.stream.Collectors.toSet());
+        return videos.stream().filter(v -> passed.contains(v.getId())).toList();
+    }
+
     public boolean maySharePastOwner(Video video) {
         if (!properties.getModeration().isRequiresRealScanner()) {
             return true;

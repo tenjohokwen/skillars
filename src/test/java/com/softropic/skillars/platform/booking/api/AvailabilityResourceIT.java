@@ -379,6 +379,64 @@ class AvailabilityResourceIT extends AbstractIntegrationTest {
 
     // ---- Deferred-78 AC6: weekStart bound (default booking.availability.weekStartRangeYears=2) ----
 
+    // Owner decision 2026-11-06 (Pitchside SES-10, option A): before deleting or changing a window, the
+    // page asks how many upcoming sessions would be left outside the coach's hours.
+    @Test
+    void windowImpact_countsUpcomingSessionsADeleteOrEditWouldLeaveOutside() {
+        UUID windowId = UUID.randomUUID();
+        // A Tuesday 10:00 Berlin session two weeks out, inside Tuesday 09:00-17:00.
+        Instant start = java.time.ZonedDateTime.now(java.time.ZoneId.of("Europe/Berlin"))
+            .with(java.time.temporal.TemporalAdjusters.next(java.time.DayOfWeek.TUESDAY)).plusWeeks(1)
+            .withHour(10).withMinute(0).withSecond(0).withNano(0).toInstant();
+        transactionTemplate.execute(status -> {
+            jdbcTemplate.update(
+                "INSERT INTO marketplace.coach_availability_windows " +
+                "(id, coach_id, day_of_week, start_time, end_time, canonical_timezone) " +
+                "VALUES (?, ?, 2, '09:00', '17:00', 'Europe/Berlin')",
+                windowId, coachProfileId
+            );
+            jdbcTemplate.update(
+                "INSERT INTO booking.bookings " +
+                "(id, parent_id, player_id, coach_id, requested_start_time, requested_end_time, " +
+                " status, canonical_timezone) " +
+                "VALUES (?, 9399999998, 9399999999, ?, ?, ?, 'CONFIRMED', 'Europe/Berlin')",
+                UUID.randomUUID(), coachProfileId,
+                Timestamp.from(start), Timestamp.from(start.plusSeconds(3600))
+            );
+            return null;
+        });
+        String impactUrl = baseUrl() + AVAILABILITY_BASE + "/me/availability/windows/" + windowId + "/impact";
+        String coach = loginAndGetCookies(COACH_EMAIL);
+
+        assertThat(impact(impactUrl, coach)).isEqualTo(1);
+        assertThat(impact(impactUrl + "?dayOfWeek=2&startTime=12:00&endTime=17:00", coach)).isEqualTo(1);
+        assertThat(impact(impactUrl + "?dayOfWeek=2&startTime=09:00&endTime=12:00", coach)).isZero();
+        // 10:00-11:00 starts inside 09:00-10:30 but runs past its end.
+        assertThat(impact(impactUrl + "?dayOfWeek=2&startTime=09:00&endTime=10:30", coach)).isEqualTo(1);
+        // A preview only: the window is still there.
+        assertThat(jdbcTemplate.queryForObject(
+            "SELECT COUNT(*) FROM marketplace.coach_availability_windows WHERE id = ?", Integer.class, windowId))
+            .isEqualTo(1);
+
+        // HttpTestClient throws on a 4xx.
+        assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
+            impactUrl + "?dayOfWeek=2", HttpMethod.GET, null, authenticatedHeaders(coach), Map.class))
+            .isInstanceOf(HttpClientErrorException.class);
+
+        String parent = loginAndGetCookies(PARENT_EMAIL);
+        assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
+            impactUrl, HttpMethod.GET, null, authenticatedHeaders(parent), Map.class))
+            .isInstanceOf(HttpClientErrorException.class)
+            .satisfies(e -> assertThat(((HttpClientErrorException) e).getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN));
+    }
+
+    private int impact(String url, String cookies) {
+        ResponseEntity<Map> response = httpTestClient.makeHttpRequest(
+            url, HttpMethod.GET, null, authenticatedHeaders(cookies), Map.class);
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+        return ((Number) response.getBody().get("sessionsLeftOutside")).intValue();
+    }
+
     @Test
     void getAvailability_weekStartExactlyAtPastBoundary_returns200() {
         String cookies = loginAndGetCookies(COACH_EMAIL);

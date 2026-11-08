@@ -50,4 +50,19 @@ class PlayerProfileServiceTest {
 
         assertThat(service.getParentEmailByPlayerId(PLAYER_ID)).isNull();
     }
+
+    @Test
+    void findParentIdByPlayerId_selfRegisteredPlayer_returnsNull() {
+        com.softropic.skillars.platform.security.repo.PlayerProfile adult =
+            new com.softropic.skillars.platform.security.repo.PlayerProfile();
+        when(playerProfileRepository.findById(PLAYER_ID)).thenReturn(Optional.of(adult));
+        org.assertj.core.api.Assertions.assertThat(service.findParentIdByPlayerId(PLAYER_ID)).isNull();
+    }
+
+    @Test
+    void findParentIdByPlayerId_missingPlayer_isNotFound() {
+        when(playerProfileRepository.findById(PLAYER_ID)).thenReturn(Optional.empty());
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> service.findParentIdByPlayerId(PLAYER_ID))
+            .isInstanceOf(com.softropic.skillars.infrastructure.exception.ResourceNotFoundException.class);
+    }
 }

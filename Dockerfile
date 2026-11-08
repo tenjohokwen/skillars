@@ -88,6 +88,9 @@ ENV JAVA_TOOL_OPTIONS="-Duser.timezone=UTC"
 
 COPY --chown=appuser:appgroup --from=builder /app/target/skillars-*.jar app.jar
 EXPOSE 9990 8367
+# Liveness is the `smoke` group (db, diskSpace, ping), as in docker-compose.yml and deploy.yml: the
+# default /manage/health aggregates every contributor (mail transport, object storage), and a fault in
+# one of those must not mark the whole app container unhealthy. Pitchside OPS review, 2026-11-07.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --retries=3 \
-  CMD wget -qO- http://localhost:8367/manage/health || exit 1
+  CMD wget -qO- http://localhost:8367/manage/health/smoke || exit 1
 ENTRYPOINT ["java", "-jar", "app.jar"]

@@ -24,7 +24,11 @@
     />
 
     <!-- Post wrap-up summary overlay -->
-    <div v-if="showPostWrapUpSummary" class="post-wrap-up-overlay">
+    <div
+      v-if="showPostWrapUpSummary"
+      class="post-wrap-up-overlay"
+      data-testid="post-wrap-up-summary"
+    >
       <SessionDNAChart :booking-id="activeBookingId" variant="compact" />
       <div class="text-body1 text-center q-mt-md">{{ t('booking.completion.summaryTitle') }}</div>
     </div>
@@ -99,6 +103,7 @@
           v-for="item in missingRecaps.items"
           :key="item.bookingId"
           data-testid="missing-recap-item"
+          :data-booking-id="item.bookingId"
         >
           <q-item-section>
             <q-item-label>{{ item.playerName }}</q-item-label>
@@ -127,14 +132,18 @@
         flat
         dense
         icon="chevron_left"
+        data-testid="schedule-prev-week"
         :label="t('booking.schedule.prevWeek')"
         @click="prevWeek"
       />
-      <div class="text-subtitle1">{{ t('booking.schedule.weekOf', { date: selectedWeek }) }}</div>
+      <div class="text-subtitle1" data-testid="schedule-week-label">
+        {{ t('booking.schedule.weekOf', { date: selectedWeek }) }}
+      </div>
       <q-btn
         flat
         dense
         icon="chevron_right"
+        data-testid="schedule-next-week"
         :label="t('booking.schedule.nextWeek')"
         @click="nextWeek"
       />
@@ -179,11 +188,18 @@
           v-if="!bookingStore.coachSchedule || bookingStore.coachSchedule.bookings.length === 0"
           class="text-body2 q-py-md"
           style="color: var(--text-secondary)"
+          data-testid="schedule-empty"
         >
           {{ t('booking.schedule.noBookings') }}
         </div>
         <div v-else class="week-grid">
-          <div v-for="dayIndex in 7" :key="dayIndex" class="week-grid__day">
+          <div
+            v-for="dayIndex in 7"
+            :key="dayIndex"
+            class="week-grid__day"
+            data-testid="schedule-day"
+            :data-day-index="dayIndex - 1"
+          >
             <div class="week-grid__day-header text-caption text-weight-bold">
               {{ dayLabel(dayIndex - 1) }}
             </div>

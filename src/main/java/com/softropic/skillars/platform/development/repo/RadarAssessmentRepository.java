@@ -9,13 +9,16 @@ import java.util.List;
 import java.util.Set;
 import java.util.UUID;
 
+// The parent filter is null-safe: a self-registered player has no parent (player_profiles.parent_id
+// is NULL), and `= :parentId` never matches NULL, which left every such player's radar empty
+// (found by Pitchside DEV-01). The CAST types the parameter when it is bound as null.
 public interface RadarAssessmentRepository extends JpaRepository<RadarAssessmentEntry, UUID> {
 
     @Query(nativeQuery = true, value = """
         SELECT rae.* FROM development.radar_assessment_entries rae
         JOIN main.player_profiles pp ON pp.id = rae.player_id
         WHERE rae.player_id = :playerId
-          AND pp.parent_id = :parentId
+          AND pp.parent_id IS NOT DISTINCT FROM CAST(:parentId AS BIGINT)
           AND rae.coach_id = :coachId
         ORDER BY rae.assessment_date DESC
         """)
@@ -35,7 +38,7 @@ public interface RadarAssessmentRepository extends JpaRepository<RadarAssessment
         FROM development.radar_assessment_entries rae
         JOIN main.player_profiles pp ON pp.id = rae.player_id
         WHERE rae.player_id = :playerId
-          AND pp.parent_id = :parentId
+          AND pp.parent_id IS NOT DISTINCT FROM CAST(:parentId AS BIGINT)
           AND rae.skill_code IN (:skillCodes)
         GROUP BY rae.skill_code, rae.assessment_type
         """)
@@ -49,7 +52,7 @@ public interface RadarAssessmentRepository extends JpaRepository<RadarAssessment
         FROM development.radar_assessment_entries rae
         JOIN main.player_profiles pp ON pp.id = rae.player_id
         WHERE rae.player_id = :playerId
-          AND pp.parent_id = :parentId
+          AND pp.parent_id IS NOT DISTINCT FROM CAST(:parentId AS BIGINT)
           AND rae.coach_id != :excludeCoachId
         GROUP BY rae.skill_code
         """)
@@ -65,7 +68,7 @@ public interface RadarAssessmentRepository extends JpaRepository<RadarAssessment
         FROM development.radar_assessment_entries rae
         JOIN main.player_profiles pp ON pp.id = rae.player_id
         WHERE rae.player_id = :playerId
-          AND pp.parent_id = :parentId
+          AND pp.parent_id IS NOT DISTINCT FROM CAST(:parentId AS BIGINT)
           AND rae.skill_code IN (:skillCodes)
         GROUP BY rae.skill_code
         """)

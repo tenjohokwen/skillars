@@ -619,3 +619,54 @@ describe('CoachPublicProfilePage.vue — booking CTA matrix (per-session booking
     expect(lastRouter.currentRoute.value.query.returnUrl).toBe('/marketplace/coaches/coach-1')
   })
 })
+
+// Found by Pitchside suite M.
+describe('CoachPublicProfilePage.vue — own review actions and the rating header', () => {
+  afterEach(() => {
+    while (mounted.length) mounted.pop().unmount()
+    vi.clearAllMocks()
+  })
+
+  for (const [status, shown] of [
+    ['APPROVED', true],
+    ['PENDING', true],
+    ['UNDER_REVIEW', false],
+    ['BLOCKED', false],
+  ]) {
+    it(`${shown ? 'offers' : 'does not offer'} Edit on a ${status} review`, async () => {
+      getCoachProfile.mockResolvedValue(PROFILE)
+      getMyReviewForCoach.mockResolvedValue({
+        reviewId: MY_REVIEW_ID,
+        rating: 4,
+        body: 'Good',
+        moderationStatus: status,
+      })
+
+      const wrapper = await mountPage()
+
+      expect(wrapper.find('[data-testid="review-edit-btn"]').exists()).toBe(shown)
+    })
+  }
+
+  it('refreshes the average and count once a review is submitted', async () => {
+    getCoachProfile
+      .mockResolvedValueOnce({ ...PROFILE, averageRating: 4, reviewCount: 1 })
+      .mockResolvedValueOnce({ ...PROFILE, averageRating: 4.5, reviewCount: 2 })
+    getMyReviewForCoach.mockRejectedValue({
+      response: { data: { errorMsg: { errorKey: 'reviews.reviewNotFound' } } },
+    })
+    const { submitReview } = await import('src/api/reviews.api')
+    submitReview.mockResolvedValue({ reviewId: 'new' })
+
+    const wrapper = await mountPage()
+    const state = wrapper.vm.$.setupState
+    state.reviewDialogMode = 'create'
+    state.reviewDialogRating = 5
+    state.reviewDialogBody = 'Great coach'
+    await state.submitReviewDialog()
+    await flushPromises()
+
+    expect(state.profile.averageRating).toBe(4.5)
+    expect(state.profile.reviewCount).toBe(2)
+  })
+})

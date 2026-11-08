@@ -75,9 +75,6 @@ public class VideoResource {
 
     // A subject viewer (parent / player of a coach video) has nothing to do with a failed, held or
     // locked upload — those stay between the coach and moderation.
-    private static final Set<OperationalState> SUBJECT_EXCLUDED_STATES =
-        Set.of(OperationalState.DELETED, OperationalState.PURGED, OperationalState.FAILED,
-            OperationalState.LOCKED, OperationalState.HIDDEN, OperationalState.REJECTED);
 
     @PostMapping("/uploads/initiate")
     @PreAuthorize(SecurityConstants.HAS_COACH_ROLE)
@@ -156,7 +153,8 @@ public class VideoResource {
         long storageLimit = quotaConfigService.getStorageQuotaBytes(ownerId);
         long bandwidthLimit = quotaConfigService.getBandwidthQuotaBytesMonthly(ownerId);
         return ResponseEntity.ok(new VideoQuotaResponse(
-            storageUsed, storageLimit, bandwidthUsed, bandwidthLimit, null));
+            storageUsed, storageLimit, bandwidthUsed, bandwidthLimit, null,
+            videoService.maxUploadBytesByType(), videoService.allowedMimeTypes()));
     }
 
     @GetMapping("/my")
@@ -233,10 +231,9 @@ public class VideoResource {
             .toList();
     }
 
-    /** Subject viewers only ever see playable-or-pending coach videos — not FAILED / HIDDEN ones. */
+    /** Subject viewers see only shareable, not-failed coach videos (VideoSubjectService). */
     private List<VideoSummaryResponse> listBySubject(Long playerId) {
-        return videoRepository
-            .findBySubjectPlayerIdAndOperationalStateNotInOrderByCreatedAtDesc(playerId, SUBJECT_EXCLUDED_STATES)
+        return videoSubjectService.shareableForSubject(playerId)
             .stream()
             .map(VideoResource::toSummary)
             .toList();

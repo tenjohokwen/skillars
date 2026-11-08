@@ -219,6 +219,54 @@ class MessagingServiceTest {
         return coach;
     }
 
+    // ---- Pitchside MSG-17: a deep-linked thread's summary, whatever its status ----
+
+    @Test
+    void getConversation_party_getsTheSummaryOfABlockedThread() {
+        Conversation c = conv(CONVERSATION_ID, coachId, PLAYER_ID);
+        c.setStatus(com.softropic.skillars.platform.messaging.contract.ConversationStatus.BLOCKED);
+        when(conversationRepository.findById(CONVERSATION_ID)).thenReturn(Optional.of(c));
+        when(coachProfileRepository.findByUserId(COACH_USER_ID))
+            .thenReturn(Optional.of(coachProfile(CoachProfileStatus.ACTIVE)));
+        when(agePolicyService.findMessagingPoliciesByPlayerIds(any()))
+            .thenReturn(Map.of(PLAYER_ID, MessagingPolicy.unrestricted()));
+        when(playerProfileService.getPlayerNamesByPlayerIds(any())).thenReturn(Map.of(PLAYER_ID, "Ann A"));
+        when(coachProfileRepository.findAllById(any())).thenReturn(List.of(coachProfile(CoachProfileStatus.ACTIVE)));
+        when(messageRepository.findLatestApprovedPerConversation(any())).thenReturn(List.of());
+        when(messageRepository.countUnreadPerConversation(any(), any(), any())).thenReturn(List.of());
+
+        var summary = messagingService.getConversation(CONVERSATION_ID, COACH_USER_ID, "COACH");
+
+        assertThat(summary.status()).isEqualTo("BLOCKED");
+        assertThat(summary.canSend()).isFalse();
+    }
+
+    @Test
+    void getConversation_parentOfAPlayerNowAdult_isRefused() {
+        Conversation c = conv(CONVERSATION_ID, coachId, PLAYER_ID);
+        c.setParentId(PARENT_USER_ID);
+        when(conversationRepository.findById(CONVERSATION_ID)).thenReturn(Optional.of(c));
+        // master's guard (#479) reads findMessagingPolicy, so a missing player row never refuses the parent.
+        when(agePolicyService.findMessagingPolicy(PLAYER_ID)).thenReturn(Optional.of(MessagingPolicy.unrestricted()));
+
+        assertThatThrownBy(() -> messagingService.getConversation(CONVERSATION_ID, PARENT_USER_ID, "PARENT"))
+            .isInstanceOf(OperationNotAllowedException.class)
+            .satisfies(e -> assertThat(((OperationNotAllowedException) e).getErrorCode())
+                .isEqualTo(MessagingErrorCode.PARENTAL_OVERSIGHT_NOT_APPLICABLE));
+    }
+
+    @Test
+    void getConversation_nonParty_isRefused() {
+        Conversation c = conv(CONVERSATION_ID, coachId, PLAYER_ID);
+        c.setParentId(PARENT_USER_ID);
+        when(conversationRepository.findById(CONVERSATION_ID)).thenReturn(Optional.of(c));
+
+        assertThatThrownBy(() -> messagingService.getConversation(CONVERSATION_ID, 999L, "PARENT"))
+            .isInstanceOf(OperationNotAllowedException.class)
+            .satisfies(e -> assertThat(((OperationNotAllowedException) e).getErrorCode())
+                .isEqualTo(MessagingErrorCode.NOT_A_PARTY));
+    }
+
     private void arrangeSend(MessagingPolicy policy, CoachProfileStatus coachStatus) {
         Conversation c = conv(CONVERSATION_ID, coachId, PLAYER_ID);
         c.setParentId(PARENT_USER_ID);

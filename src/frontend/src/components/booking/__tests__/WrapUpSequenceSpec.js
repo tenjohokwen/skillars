@@ -98,6 +98,121 @@ describe('WrapUpSequence.vue — session recap step (skillars-12-2)', () => {
     expect(findStep5SubmitBtn(wrapper)).toBeTruthy()
   })
 
+  // Owner decision 2026-11-06 (option A): the old checkbox started ticked but Next waited for a
+  // touch, so one click recorded a no-show. Now two buttons, nothing preselected, one click each.
+  it('attendance has no preselected answer and Next is gone', async () => {
+    const wrapper = mountComponent()
+    await flushPromises()
+    expect(wrapper.find('[data-testid="wrap-up-attended"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="wrap-up-absent"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="wrap-up-next"]').exists()).toBe(false)
+    expect(wrapper.vm.$.setupState.playerAttended).toBeNull()
+    expect(wrapper.vm.$.setupState.step).toBe(1)
+  })
+
+  it.each([
+    ['wrap-up-attended', true],
+    ['wrap-up-absent', false],
+  ])(
+    'one click on %s records %s, moves to the ratings and is what gets submitted',
+    async (id, attended) => {
+      const wrapper = mountComponent()
+      await flushPromises()
+      await wrapper.find(`[data-testid="${id}"]`).trigger('click')
+      await flushPromises()
+      expect(wrapper.vm.$.setupState.step).toBe(2)
+      expect(wrapper.text()).toContain('booking.wrapUp.step2Title')
+
+      wrapper.vm.$.setupState.step = 4
+      await flushPromises()
+      await wrapper.find('textarea').setValue('Rondos')
+      const areas = wrapper.findAll('textarea')
+      await areas[1].setValue('Weak foot')
+      await findStep5SubmitBtn(wrapper).trigger('click')
+      await flushPromises()
+      expect(storeOf(wrapper).handleSubmitWrapUp).toHaveBeenCalledWith(
+        'booking-1',
+        expect.objectContaining({ playerAttended: attended }),
+      )
+    },
+  )
+
+  it('a mistaken attendance answer can be taken back from the ratings step', async () => {
+    const wrapper = mountComponent()
+    await flushPromises()
+    await wrapper.find('[data-testid="wrap-up-absent"]').trigger('click')
+    await flushPromises()
+    await wrapper.find('[data-testid="wrap-up-back"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.vm.$.setupState.step).toBe(1)
+    await wrapper.find('[data-testid="wrap-up-attended"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.vm.$.setupState.playerAttended).toBe(true)
+    expect(wrapper.vm.$.setupState.step).toBe(2)
+  })
+
+  // Found by Pitchside SES-05: the auto-advance lived in the template and called setTimeout, which Vue
+  // template expressions cannot reach, so five technique stars threw and left the coach stuck (Next
+  // only renders for 1–4 stars). Driven through the rating's own event, not a setupState assignment.
+  it('five stars for technique moves on to the homework step by itself', async () => {
+    vi.useFakeTimers()
+    try {
+      const wrapper = mountComponent()
+      await flushPromises()
+      wrapper.vm.$.setupState.step = 2
+      wrapper.vm.$.setupState.currentRating = 'technique'
+      await flushPromises()
+
+      wrapper.findComponent({ name: 'QRating' }).vm.$emit('update:modelValue', 5)
+      await flushPromises()
+      expect(wrapper.vm.$.setupState.step).toBe(2)
+      vi.advanceTimersByTime(200)
+      await flushPromises()
+      expect(wrapper.vm.$.setupState.step).toBe(3)
+      expect(wrapper.text()).toContain('booking.wrapUp.step4Title')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('Back in the beat after five stars is not undone by the auto-advance', async () => {
+    vi.useFakeTimers()
+    try {
+      const wrapper = mountComponent()
+      await flushPromises()
+      wrapper.vm.$.setupState.step = 2
+      wrapper.vm.$.setupState.currentRating = 'technique'
+      await flushPromises()
+
+      wrapper.findComponent({ name: 'QRating' }).vm.$emit('update:modelValue', 5)
+      await flushPromises()
+      await wrapper.find('[data-testid="wrap-up-back"]').trigger('click')
+      vi.advanceTimersByTime(200)
+      await flushPromises()
+      expect(wrapper.vm.$.setupState.step).toBe(1)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('four stars for technique waits for Next', async () => {
+    vi.useFakeTimers()
+    try {
+      const wrapper = mountComponent()
+      await flushPromises()
+      wrapper.vm.$.setupState.step = 2
+      wrapper.vm.$.setupState.currentRating = 'technique'
+      await flushPromises()
+
+      wrapper.findComponent({ name: 'QRating' }).vm.$emit('update:modelValue', 4)
+      vi.advanceTimersByTime(1000)
+      await flushPromises()
+      expect(wrapper.vm.$.setupState.step).toBe(2)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('has no voice-note step, recorder or upload any more', async () => {
     const wrapper = mountComponent()
     await flushPromises()

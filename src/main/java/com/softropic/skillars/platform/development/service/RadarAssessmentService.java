@@ -59,7 +59,7 @@ public class RadarAssessmentService {
             throw new FeatureGatedException("skills_radar", "INSTRUCTOR");
         }
 
-        Long parentId = playerProfileService.getParentIdByPlayerId(playerId);
+        Long parentId = playerProfileService.findParentIdByPlayerId(playerId);
 
         List<SkillScoreItem> entryList = req.entries();
         Set<String> submittedCodes = entryList.stream()
@@ -113,7 +113,7 @@ public class RadarAssessmentService {
             throw new FeatureGatedException("skills_radar", "INSTRUCTOR");
         }
 
-        Long parentId = playerProfileService.getParentIdByPlayerId(playerId);
+        Long parentId = playerProfileService.findParentIdByPlayerId(playerId);
 
         List<RadarAssessmentEntry> mine = radarRepository
             .findByPlayerIdAndCoachIdOrderByAssessmentDateDesc(playerId, parentId, coachId);

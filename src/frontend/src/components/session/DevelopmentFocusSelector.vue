@@ -9,6 +9,9 @@
         :outline="!selected.includes(option)"
         :color="selected.includes(option) ? 'primary' : undefined"
         :text-color="selected.includes(option) ? 'white' : undefined"
+        data-testid="focus-chip"
+        :data-focus="option"
+        :data-selected="selected.includes(option)"
         @click="toggle(option)"
       >
         {{ t(`session.builder.focus.${option}`) }}

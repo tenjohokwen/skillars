@@ -1,5 +1,5 @@
 <template>
-  <div class="wrap-up">
+  <div class="wrap-up" data-testid="wrap-up" :data-step="step">
     <!-- Step pip indicator -->
     <div class="wrap-up__pips">
       <div
@@ -13,34 +13,47 @@
     <!-- Step 1: Attendance -->
     <div v-if="step === 1" class="wrap-up__step">
       <div class="text-h6 q-mb-lg">{{ t('booking.wrapUp.step1Title') }}</div>
-      <q-checkbox
-        v-model="playerAttended"
-        :label="t('booking.wrapUp.step1Label') + ': ' + playerName"
-        class="q-mb-xl"
-        size="xl"
-        @update:model-value="
-          () => {
-            attendanceTouched = true
-          }
-        "
-      />
-      <q-btn
-        unelevated
-        class="wrap-up__next-btn"
-        :label="t('common.next')"
-        :disable="!attendanceTouched"
-        @click="step = 2"
-      />
+      <div class="text-subtitle1 q-mb-lg">
+        {{ t('booking.wrapUp.step1Question', { name: playerName }) }}
+      </div>
+      <div class="wrap-up__attendance">
+        <q-btn
+          unelevated
+          class="wrap-up__next-btn"
+          :label="t('booking.wrapUp.step1Attended')"
+          data-testid="wrap-up-attended"
+          @click="recordAttendance(true)"
+        />
+        <q-btn
+          outline
+          class="wrap-up__next-btn"
+          :label="t('booking.wrapUp.step1Absent')"
+          data-testid="wrap-up-absent"
+          @click="recordAttendance(false)"
+        />
+      </div>
     </div>
 
     <!-- Step 2: Ratings -->
     <div v-else-if="step === 2" class="wrap-up__step">
+      <!-- One click answers attendance, so a mistaken answer must be easy to take back. -->
+      <q-btn
+        flat
+        dense
+        no-caps
+        icon="chevron_left"
+        class="self-start q-mb-sm"
+        data-testid="wrap-up-back"
+        :label="t('common.back')"
+        @click="step = 1"
+      />
       <div class="text-h6 q-mb-md">{{ t('booking.wrapUp.step2Title') }}</div>
 
       <div v-if="currentRating === 'effort'" class="wrap-up__rating-row">
         <div class="text-subtitle1 q-mb-sm">{{ t('booking.wrapUp.step2Effort') }}</div>
         <q-rating
           v-model="effortRating"
+          data-testid="wrap-up-rating-effort"
           size="48px"
           color="amber"
           icon="star_border"
@@ -66,6 +79,7 @@
         <div class="text-subtitle1 q-mb-sm">{{ t('booking.wrapUp.step2Focus') }}</div>
         <q-rating
           v-model="focusRating"
+          data-testid="wrap-up-rating-focus"
           size="48px"
           color="amber"
           icon="star_border"
@@ -91,19 +105,13 @@
         <div class="text-subtitle1 q-mb-sm">{{ t('booking.wrapUp.step2Technique') }}</div>
         <q-rating
           v-model="techniqueRating"
+          data-testid="wrap-up-rating-technique"
           size="48px"
           color="amber"
           icon="star_border"
           icon-selected="star"
           :max="5"
-          @update:model-value="
-            (v) => {
-              if (v === 5)
-                setTimeout(() => {
-                  if (techniqueRating === 5) step = 3
-                }, 200)
-            }
-          "
+          @update:model-value="onTechniqueRated"
         />
         <q-btn
           v-if="techniqueRating > 0 && techniqueRating < 5"
@@ -158,7 +166,13 @@
         </q-card>
       </div>
 
-      <q-btn unelevated class="wrap-up__next-btn" :label="t('common.next')" @click="step = 4" />
+      <q-btn
+        unelevated
+        class="wrap-up__next-btn"
+        :label="t('common.next')"
+        data-testid="wrap-up-next"
+        @click="step = 4"
+      />
     </div>
 
     <!-- Step 4: Session Recap (i18n keys keep their historical step5* names) -->
@@ -173,6 +187,7 @@
         maxlength="500"
         counter
         class="q-mb-md full-width"
+        data-testid="recap-what-we-did"
         :label="t('booking.wrapUp.step5WhatWeDidLabel')"
         :placeholder="t('booking.wrapUp.step5WhatWeDidPlaceholder')"
       />
@@ -184,6 +199,7 @@
         maxlength="500"
         counter
         class="q-mb-md full-width"
+        data-testid="recap-whats-next"
         :label="t('booking.wrapUp.step5WhatsNextLabel')"
         :placeholder="t('booking.wrapUp.step5WhatsNextPlaceholder')"
       />
@@ -204,6 +220,7 @@
         unelevated
         class="wrap-up__next-btn"
         :label="t('booking.wrapUp.step5Done')"
+        data-testid="wrap-up-done"
         :loading="submitting"
         :disable="
           !recapWhatWeDid.trim() ||
@@ -244,12 +261,27 @@ const $q = useQuasar()
 const bookingStore = useBookingStore()
 
 const step = ref(1)
-const playerAttended = ref(true)
-const attendanceTouched = ref(false)
+// Nothing is preselected: the coach answers with one click, and that answer moves the wizard on.
+const playerAttended = ref(null)
+function recordAttendance(attended) {
+  playerAttended.value = attended
+  step.value = 2
+}
 const effortRating = ref(0)
 const focusRating = ref(0)
 const techniqueRating = ref(0)
 const currentRating = ref('effort')
+
+// Five stars on the last axis moves on by itself, after a beat so the fifth star is seen. In the script,
+// not the template: Vue template expressions cannot reach setTimeout (not on its globals allow-list), so
+// the inline version threw and left a coach who gave five stars with no way forward (Next shows for 1–4).
+function onTechniqueRated(v) {
+  if (v !== 5) return
+  setTimeout(() => {
+    // Only from the ratings step: a Back pressed in the beat before must not be undone.
+    if (techniqueRating.value === 5 && step.value === 2) step.value = 3
+  }, 200)
+}
 const homeworkDrillIds = ref([])
 const recapWhatWeDid = ref('')
 const recapWhatsNext = ref('')
@@ -407,6 +439,13 @@ onMounted(() => {
   flex-direction: column;
   align-items: center;
   gap: 8px;
+}
+
+.wrap-up__attendance {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  justify-content: center;
 }
 
 .wrap-up__next-btn {

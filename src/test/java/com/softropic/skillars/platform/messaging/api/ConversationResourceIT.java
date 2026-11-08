@@ -341,6 +341,41 @@ class ConversationResourceIT extends AbstractIntegrationTest {
         assertThat(content).isNotEmpty();
     }
 
+    // Pitchside MSG-17: the own lists leave BLOCKED threads out, so a deep link needs the summary by id.
+    @Test
+    void getConversation_blockedThread_partyGetsItsBlockedSummary_otherCallersAreRefused() {
+        String coachCookies = loginAndGetCookies(COACH_EMAIL);
+        Long conversationId = ensureConversation(coachCookies);
+        transactionTemplate.execute(s -> {
+            jdbcTemplate.update("UPDATE messaging.conversations SET status = 'BLOCKED' WHERE id = ?", conversationId);
+            return null;
+        });
+
+        ResponseEntity<Map> resp = httpTestClient.makeHttpRequest(
+            baseUrl() + MESSAGING_BASE + "/conversations/" + conversationId,
+            HttpMethod.GET,
+            null,
+            authenticatedHeaders(coachCookies),
+            Map.class);
+
+        assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(toLong(resp.getBody().get("conversationId"))).isEqualTo(conversationId);
+        assertThat(resp.getBody().get("status")).isEqualTo("BLOCKED");
+        assertThat(resp.getBody().get("canSend")).isEqualTo(false);
+
+        // The player is an adult: their parent is no party to the thread.
+        // HttpTestClient throws on a 4xx.
+        String parentCookies = loginAndGetCookies(PARENT_EMAIL);
+        assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
+            baseUrl() + MESSAGING_BASE + "/conversations/" + conversationId,
+            HttpMethod.GET,
+            null,
+            authenticatedHeaders(parentCookies),
+            Map.class))
+            .isInstanceOf(HttpClientErrorException.class)
+            .satisfies(e -> assertThat(((HttpClientErrorException) e).getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN));
+    }
+
     @Test
     void getMessages_blockedMessage_contentIsNull() {
         String coachCookies = loginAndGetCookies(COACH_EMAIL);

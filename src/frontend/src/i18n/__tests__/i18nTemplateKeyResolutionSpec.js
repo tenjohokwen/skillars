@@ -116,11 +116,11 @@ const DYNAMIC_KEY_CALL_SITES = [
     reason: 'tooltip text keyed by the same tier enum',
   },
   {
-    at: 'src/components/session/DevelopmentFocusSelector.vue:14',
+    at: 'src/components/session/DevelopmentFocusSelector.vue:17',
     reason: 'option label keyed by the focus-area enum value being iterated',
   },
   {
-    at: 'src/components/video/VideoStatusCard.vue:99',
+    at: 'src/components/video/VideoStatusCard.vue:100',
     reason: 'status label keyed by the video processing status enum',
   },
   // ---- string concatenation ('literal.prefix.' + variable) ----
@@ -151,7 +151,7 @@ const DYNAMIC_KEY_CALL_SITES = [
     reason: "status label keyed by a lookup-table entry's own key field",
   },
   {
-    at: 'src/components/development/SluNarrativeSummary.vue:4',
+    at: 'src/components/development/SluNarrativeSummary.vue:13',
     reason: "$t on a narrative item's own server-supplied key + params",
   },
   {
@@ -194,11 +194,11 @@ const DYNAMIC_KEY_CALL_SITES = [
       't() on payment.error.<code> for a server-supplied payment.* errorKey, after a te() probe',
   },
   {
-    at: 'src/pages/coach/CoachCommandCenterPage.vue:891',
+    at: 'src/pages/coach/CoachCommandCenterPage.vue:907',
     reason: 'notify message keyed by a successMessage key chosen earlier in the handler',
   },
   {
-    at: 'src/pages/coach/CoachCommandCenterPage.vue:902',
+    at: 'src/pages/coach/CoachCommandCenterPage.vue:918',
     reason: 'notify message keyed by a messageKey chosen earlier in the handler',
   },
   {
@@ -207,7 +207,7 @@ const DYNAMIC_KEY_CALL_SITES = [
       't on stripeCallbackErrorKey, a computed mapping ?stripe_error to one of three payment.error.stripeCallback.* keys',
   },
   {
-    at: 'src/pages/coach/CoachPlayerDetailPage.vue:202',
+    at: 'src/pages/coach/CoachPlayerDetailPage.vue:207',
     reason: '$t on noContributionsKey, a computed that picks between two real i18n keys at runtime',
   },
   {
@@ -224,7 +224,7 @@ const DYNAMIC_KEY_CALL_SITES = [
     reason: 'composerLockKey picks messaging.blockedBanner or messaging.cannotSend',
   },
   {
-    at: 'src/pages/messaging/MessagingPage.vue:472',
+    at: 'src/pages/messaging/MessagingPage.vue:479',
     reason: 'send error: messagingErrorI18nKey maps a backend code to a messaging.errors.* key',
   },
   {
@@ -258,11 +258,11 @@ const DYNAMIC_KEY_CALL_SITES = [
       'subscribe error: subscriptionErrorI18nKey maps a backend code to subscription.errors.*',
   },
   {
-    at: 'src/pages/marketplace/CoachPublicProfilePage.vue:230',
+    at: 'src/pages/marketplace/CoachPublicProfilePage.vue:262',
     reason: "label keyed by the review-eligibility response's own reasonCode enum",
   },
   {
-    at: 'src/pages/parent/ParentDevelopmentPortalPage.vue:99',
+    at: 'src/pages/parent/ParentDevelopmentPortalPage.vue:104',
     reason: '$t on noContributionsKey, the Parent-portal twin of the Coach-side computed above',
   },
   {
@@ -322,12 +322,12 @@ const DYNAMIC_KEY_CALL_SITES = [
       'subject-summary field label: te()-guarded admin.appeals.subjectField.<backend map key>, raw key fallback',
   },
   {
-    at: 'src/pages/parent/ParentBookingsPage.vue:660',
+    at: 'src/pages/parent/ParentBookingsPage.vue:661',
     reason:
       't on a lookup-table value mapping a backend errorKey to a real no-show copy key, with a literal fallback',
   },
   {
-    at: 'src/pages/parent/ParentBookingsPage.vue:700',
+    at: 'src/pages/parent/ParentBookingsPage.vue:701',
     reason:
       't on a lookup-table value mapping a backend errorKey to a real proposal/withdraw copy key, with a literal-key fallback argument',
   },

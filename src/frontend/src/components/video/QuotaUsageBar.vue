@@ -11,7 +11,7 @@
       <div class="quota-row q-mb-md">
         <div class="row items-center justify-between q-mb-xs">
           <span class="text-caption text-secondary">{{ t('video.quota.storage') }}</span>
-          <span class="text-caption"
+          <span class="text-caption" data-testid="quota-storage"
             >{{ formatBytes(storageUsedBytes) }} / {{ formatBytes(storageLimitBytes) }}</span
           >
         </div>

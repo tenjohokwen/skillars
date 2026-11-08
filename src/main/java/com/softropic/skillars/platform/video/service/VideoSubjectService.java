@@ -5,10 +5,14 @@ import com.softropic.skillars.platform.booking.contract.PlannableBookingSummary;
 import com.softropic.skillars.platform.booking.service.BookingQueryService;
 import com.softropic.skillars.platform.security.repo.PlayerProfile;
 import com.softropic.skillars.platform.security.repo.PlayerProfileRepository;
+import com.softropic.skillars.platform.video.contract.OperationalState;
 import com.softropic.skillars.platform.video.contract.VideoType;
 import com.softropic.skillars.platform.video.contract.exception.VideoSubjectInvalidException;
+import com.softropic.skillars.platform.video.repo.Video;
+import com.softropic.skillars.platform.video.repo.VideoRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Duration;
 import java.time.Instant;
@@ -48,6 +52,25 @@ public class VideoSubjectService {
 
     private final BookingQueryService bookingQueryService;
     private final PlayerProfileRepository playerProfileRepository;
+    private final VideoRepository videoRepository;
+    private final VideoSharingPolicy videoSharingPolicy;
+
+    /** States a subject viewer never sees: gone, failed or held back. */
+    static final Set<OperationalState> SUBJECT_EXCLUDED_STATES =
+        Set.of(OperationalState.DELETED, OperationalState.PURGED, OperationalState.FAILED,
+            OperationalState.LOCKED, OperationalState.HIDDEN, OperationalState.REJECTED);
+
+    /**
+     * The coach videos a player (or their parent) may see: not gone or held back, and shareable past
+     * the uploading coach. Owner decision 2026-11-07 (Pitchside VID-08, option A): while the scanner
+     * gate is on, an unscanned video is left out of the list entirely, rather than listed with a Play
+     * button that answers "you do not have access". The coach still sees it in their own list.
+     */
+    @Transactional(readOnly = true)
+    public List<Video> shareableForSubject(Long playerId) {
+        return videoSharingPolicy.shareable(videoRepository
+            .findBySubjectPlayerIdAndOperationalStateNotInOrderByCreatedAtDesc(playerId, SUBJECT_EXCLUDED_STATES));
+    }
 
     /**
      * @return the subject PlayerProfile id, or {@code null} for an upload with no subject

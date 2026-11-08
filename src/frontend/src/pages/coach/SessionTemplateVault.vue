@@ -9,7 +9,11 @@
       <q-spinner-dots size="36px" color="primary" />
     </div>
 
-    <div v-else-if="!templateStore.templates.length" class="text-center q-pa-xl">
+    <div
+      v-else-if="!templateStore.templates.length"
+      class="text-center q-pa-xl"
+      data-testid="templates-empty"
+    >
       <q-icon name="bookmark_border" size="64px" color="grey-5" />
       <div class="text-h6 q-mt-md">{{ t('session.templates.emptyTitle') }}</div>
       <div class="text-body2 text-secondary q-mt-sm">
@@ -18,12 +22,20 @@
     </div>
 
     <q-list v-else separator>
-      <q-item v-for="tmpl in templateStore.templates" :key="tmpl.id">
+      <q-item
+        v-for="tmpl in templateStore.templates"
+        :key="tmpl.id"
+        data-testid="template-item"
+        :data-template-id="tmpl.id"
+      >
         <q-item-section>
-          <q-item-label class="text-weight-medium">{{ tmpl.name }}</q-item-label>
-          <q-item-label caption>
-            {{ t('session.templates.drillCount', { count: tmpl.drillCount }) }}
-            · {{ t('session.templates.deployCount', { count: tmpl.deployCount }) }}
+          <q-item-label class="text-weight-medium" data-testid="template-name">{{
+            tmpl.name
+          }}</q-item-label>
+          <q-item-label caption data-testid="template-meta">
+            {{ t('session.templates.drillCount', { count: tmpl.drillCount }, tmpl.drillCount) }}
+            ·
+            {{ t('session.templates.deployCount', { count: tmpl.deployCount }, tmpl.deployCount) }}
             <template v-if="tmpl.lastDeployedAt">
               · {{ t('session.templates.lastDeployed', { date: formatDate(tmpl.lastDeployedAt) }) }}
             </template>
@@ -33,16 +45,31 @@
           <SessionDNAChart :session-dna="tmpl.sessionDna ?? defaultDna" variant="compact" />
         </q-item-section>
         <q-item-section side>
-          <q-btn flat dense round icon="more_vert">
+          <q-btn flat dense round icon="more_vert" data-testid="template-menu">
             <q-menu>
               <q-list>
-                <q-item clickable v-close-popup @click="startDeploy(tmpl)">
+                <q-item
+                  clickable
+                  v-close-popup
+                  data-testid="template-use"
+                  @click="startDeploy(tmpl)"
+                >
                   <q-item-section>{{ t('session.templates.useThisSession') }}</q-item-section>
                 </q-item>
-                <q-item clickable v-close-popup @click="startRename(tmpl)">
+                <q-item
+                  clickable
+                  v-close-popup
+                  data-testid="template-rename"
+                  @click="startRename(tmpl)"
+                >
                   <q-item-section>{{ t('session.templates.rename') }}</q-item-section>
                 </q-item>
-                <q-item clickable v-close-popup @click="confirmDelete(tmpl)">
+                <q-item
+                  clickable
+                  v-close-popup
+                  data-testid="template-delete"
+                  @click="confirmDelete(tmpl)"
+                >
                   <q-item-section class="text-negative">{{
                     t('session.templates.delete')
                   }}</q-item-section>
@@ -67,11 +94,17 @@
             autofocus
             maxlength="200"
             :label="t('session.templates.nameLabel')"
+            data-testid="template-rename-input"
           />
         </q-card-section>
         <q-card-actions align="right">
           <q-btn flat :label="t('common.cancel')" v-close-popup />
-          <q-btn color="primary" :label="t('session.templates.saveAction')" @click="saveRename" />
+          <q-btn
+            color="primary"
+            :label="t('session.templates.saveAction')"
+            data-testid="template-rename-save"
+            @click="saveRename"
+          />
         </q-card-actions>
       </q-card>
     </q-dialog>
@@ -127,6 +160,7 @@
             :label="t('session.templates.deployAction')"
             :loading="deploying"
             :disable="!deployBookingId"
+            data-testid="deploy-confirm"
             @click="confirmDeploy"
           />
         </q-card-actions>
@@ -187,7 +221,8 @@ function confirmDelete(tmpl) {
   $q.dialog({
     title: t('session.templates.delete'),
     message: t('session.templates.confirmDelete'),
-    cancel: true,
+    ok: { 'data-testid': 'template-delete-confirm' },
+    cancel: { flat: true, 'data-testid': 'template-delete-cancel' },
     persistent: true,
   }).onOk(async () => {
     try {

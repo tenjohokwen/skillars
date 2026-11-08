@@ -31,7 +31,7 @@
         icon="upload"
         :label="t('video.management.coachUploadButton')"
         :loading="uploadBusy"
-        :disable="uploadBusy"
+        :disable="uploadBusy || quotaLoading"
         data-testid="coach-upload-dropdown"
       >
         <q-list>
@@ -56,11 +56,14 @@
         icon="upload"
         :label="t('video.management.uploadButton')"
         :loading="uploadBusy"
+        :disable="quotaLoading"
         data-testid="player-upload-btn"
         @click="openUpload('HOMEWORK')"
       />
       <q-linear-progress
         v-if="uploadState === 'uploading'"
+        data-testid="video-upload-progress"
+        :data-progress="uploadProgress"
         :value="uploadProgress / 100"
         color="primary"
         class="q-mt-sm"
@@ -81,7 +84,7 @@
       <q-skeleton v-for="i in 3" :key="i" type="QCard" height="80px" />
     </div>
 
-    <div v-else-if="videos.length === 0" class="text-secondary">
+    <div v-else-if="videos.length === 0" class="text-secondary" data-testid="videos-empty">
       {{ t('video.management.emptyState') }}
     </div>
 
@@ -204,9 +207,13 @@ const authStore = useAuthStore()
 // Shared by the PLAYER route (player/videos) and the COACH route (coach/videos).
 const isCoach = computed(() => authStore.isCoach)
 const COACH_VIDEO_TYPES = ['COACH_REVIEW', 'DRILL_DEMO']
-// Client-side pre-check for player HOMEWORK only; coach types have their own (larger, config-driven)
-// server limits, which the initiate call reports as a validation error.
-const HOMEWORK_MAX_BYTES = 500 * 1024 * 1024
+// Owner decision 2026-11-07 (Pitchside VID-05, option A): the size limit (per video type) and the
+// allowed MIME types come from the server with the quota, so the page refuses a file the server
+// would refuse, before any upload starts. The server still enforces both.
+function sizeLimitLabel(bytes) {
+  const mib = 1024 * 1024
+  return bytes >= mib ? `${Math.floor(bytes / mib)} MB` : `${Math.floor(bytes / 1024)} KB`
+}
 
 const videos = ref([])
 const videosLoading = ref(true)
@@ -373,12 +380,15 @@ function uploadErrorMessage(err) {
   const code = err?.response?.data?.errorMsg?.errorKey
   if (code === 'VIDEO_MINOR_UPLOAD_REFUSED') return t('video.management.minorUploadRefused')
   if (code === 'VIDEO_SUBJECT_INVALID') return t('video.management.subjectInvalid')
+  if (code === 'QUOTA_EXCEEDED') return t('video.management.quotaExceeded')
   if (status === 429) return t('video.management.quotaOrRateLimited')
   if (status === 409) return t('video.management.retryConflict')
   if (status === 422 || status === 400) return t('video.management.uploadRejected')
   return t('video.management.uploadError')
 }
 
+// Uploads wait for the quota: it carries the server's size limit and allowed types, which the
+// checks below need (found by Pitchside VID-05 — a fast pick skipped them).
 async function onFileSelected(event) {
   const file = event.target.files?.[0]
   // Reset the input so the same file can be re-selected after an error
@@ -387,11 +397,23 @@ async function onFileSelected(event) {
   pendingSelection = null
   if (!file || !selection) return
 
-  const isHomework = selection.retryVideo
-    ? selection.retryVideo.videoType === 'HOMEWORK'
-    : selection.videoType === 'HOMEWORK'
-  if (isHomework && file.size > HOMEWORK_MAX_BYTES) {
-    $q.notify({ type: 'negative', message: t('video.management.fileTooLarge') })
+  const videoType = selection.retryVideo ? selection.retryVideo.videoType : selection.videoType
+  const maxBytes = Number(quota.value.maxUploadBytes?.[videoType] ?? 0)
+  if (maxBytes && file.size > maxBytes) {
+    $q.notify({
+      type: 'negative',
+      message: t('video.management.fileTooLarge', { size: sizeLimitLabel(maxBytes) }),
+    })
+    return
+  }
+  // New uploads only: a retry re-sends a file the server already accepted the type of, and the
+  // server does not check the type on retry (review finding on 2b8e8fd4).
+  const allowedTypes = selection.retryVideo ? [] : (quota.value.allowedMimeTypes ?? [])
+  if (
+    allowedTypes.length &&
+    !allowedTypes.some((type) => type.toLowerCase() === (file.type || '').toLowerCase())
+  ) {
+    $q.notify({ type: 'negative', message: t('video.management.fileTypeNotAllowed') })
     return
   }
 

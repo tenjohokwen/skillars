@@ -114,6 +114,18 @@ public class MessagingResource {
         return ResponseEntity.status(HttpStatus.ACCEPTED).body(result);
     }
 
+    /** A conversation's summary for a party, any status (a deep link may point at a BLOCKED thread). */
+    @GetMapping("/conversations/{conversationId}")
+    @PreAuthorize(SecurityConstants.IS_AUTHENTICATED)
+    public ResponseEntity<ConversationSummaryDto> getConversation(
+            @PathVariable Long conversationId,
+            @RequestParam(name = "role", required = false) String roleHint,
+            Authentication auth) {
+        Long userId = resolveUserId();
+        String role = resolveRole(auth, roleHint);
+        return ResponseEntity.ok(messagingService.getConversation(conversationId, userId, role));
+    }
+
     @GetMapping("/conversations/{conversationId}/messages")
     @PreAuthorize(SecurityConstants.IS_AUTHENTICATED)
     public ResponseEntity<Page<MessageDto>> getMessages(

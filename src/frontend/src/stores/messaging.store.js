@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import {
+  fetchConversation,
   fetchConversations,
   fetchMessages,
   fetchPlayerConversations,
@@ -252,6 +253,21 @@ export const useMessagingStore = defineStore('messaging', () => {
    * Opens (creating if needed) the coach/player conversation. Idempotent server-side, so a double
    * click resolves to the same conversationId.
    */
+  /**
+   * The summary of a conversation the own list does not hold: a BLOCKED one (the lists leave those
+   * out), or one a deep link reaches before the list has it. Kept in conversationMeta, which
+   * activeConversation falls back to, so the composer follows its real status and canSend. A failure
+   * leaves it unknown; loading the thread itself reports the error.
+   */
+  async function loadConversationSummary(conversationId) {
+    try {
+      const res = await fetchConversation(conversationId)
+      if (res) conversationMeta.value[String(conversationId)] = res
+    } catch {
+      /* the thread's own load surfaces the error */
+    }
+  }
+
   async function openConversation(coachId, playerId) {
     const res = await initiateConversation(coachId, playerId)
     conversationMeta.value[String(res.conversationId)] = res
@@ -368,6 +384,7 @@ export const useMessagingStore = defineStore('messaging', () => {
     setOversightPlayer,
     postMessage,
     markConversationBlocked,
+    loadConversationSummary,
     openConversation,
     applyModerationBlocked,
     connectSse,

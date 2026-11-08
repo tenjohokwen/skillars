@@ -1,6 +1,6 @@
 <template>
   <q-page class="q-pa-md">
-    <div class="my-players-page glass-card q-pa-lg">
+    <div class="my-players-page glass-card q-pa-lg" data-testid="my-players-page">
       <div class="text-h6 q-mb-md">{{ t('coach.myPlayersTitle') }}</div>
 
       <div v-if="loading" class="flex flex-center q-py-xl">
@@ -45,6 +45,8 @@
           v-for="player in openPlayers"
           :key="player.playerId"
           class="player-item clickable q-mb-md q-pb-md row items-center justify-between"
+          data-testid="roster-player"
+          :data-player-id="player.playerId"
           role="button"
           tabindex="0"
           @click="goToPlayerDetail(player)"

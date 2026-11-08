@@ -758,9 +758,9 @@ export default {
       deployAction: 'Créer le plan de séance',
       deployAlreadyExists: 'Un plan de séance existe déjà pour cette réservation',
       deployBookingInvalid: 'Réservation introuvable ou non confirmée',
-      deployCount: '{count} utilisations',
+      deployCount: '{count} utilisation | {count} utilisations',
       lastDeployed: 'Dernière utilisation le {date}',
-      drillCount: '{count} exercices',
+      drillCount: '{count} exercice | {count} exercices',
       rename: 'Renommer',
       delete: 'Supprimer',
       confirmDelete:
@@ -1864,7 +1864,11 @@ export default {
       emptyState: 'Aucune vidéo téléversée pour le moment',
       accessDenied: "La gestion des vidéos n'est disponible que pour les joueurs et les coachs.",
       loadError: 'Impossible de charger vos vidéos. Veuillez réessayer.',
-      fileTooLarge: 'Le fichier est trop volumineux. La taille maximale est de 500 Mo.',
+      fileTooLarge: 'Le fichier est trop volumineux. La taille maximale est de {size}.',
+      fileTypeNotAllowed:
+        'Ce type de fichier ne peut pas être envoyé. Utilisez une vidéo MP4, MOV, WebM ou AVI.',
+      quotaExceeded:
+        'Pas assez d’espace de stockage pour cette vidéo. Supprimez une vidéo ou passez à une offre supérieure.',
       uploadSuccess: 'Vidéo téléversée — le traitement commencera sous peu.',
       uploadError: 'Échec du téléversement. Veuillez réessayer.',
       deleteConfirmTitle: 'Supprimer la vidéo',
@@ -2441,7 +2445,17 @@ export default {
       addWindow: 'Ajouter un créneau récurrent',
       addBlock: 'Bloquer du temps personnel',
       editWindow: 'Modifier le créneau de disponibilité',
-      deleteConfirm: 'Êtes-vous sûr de vouloir supprimer ceci ?',
+      profileFirst: 'Commencez votre profil de coach pour définir vos horaires de la semaine.',
+      openProfileBuilder: 'Ouvrir le créateur de profil',
+      deleteWindowTitle: 'Supprimer ce créneau ?',
+      deleteWindowNoSessions: "Aucune séance à venir n'est réservée sur ces horaires.",
+      deleteWindowImpact:
+        '{count} séance à venir tombe sur ces horaires. Elle reste réservée, mais les familles ne pourront plus demander ces horaires. | {count} séances à venir tombent sur ces horaires. Elles restent réservées, mais les familles ne pourront plus demander ces horaires.',
+      deleteWindowConfirm: 'Supprimer le créneau',
+      editWindowTitle: 'Modifier ce créneau ?',
+      editWindowImpact:
+        '{count} séance à venir tombe hors des nouveaux horaires. Elle reste réservée. | {count} séances à venir tombent hors des nouveaux horaires. Elles restent réservées.',
+      editWindowConfirm: 'Enregistrer',
       bookingConflictWarning:
         "Vous avez une réservation pendant cette période. Les modifications ne s'appliquent qu'à la disponibilité future.",
       blockAdded: 'Bloc horaire enregistré avec succès.',
@@ -2737,7 +2751,9 @@ export default {
     },
     wrapUp: {
       step1Title: 'Présence',
-      step1Label: 'Le joueur était présent',
+      step1Question: 'Présence de {name} ?',
+      step1Attended: 'Présent',
+      step1Absent: 'Absent',
       step2Title: 'Évaluations de séance',
       step2Effort: 'Effort',
       step2Focus: 'Concentration',

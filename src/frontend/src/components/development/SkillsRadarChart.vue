@@ -1,5 +1,5 @@
 <template>
-  <div class="skills-radar-chart">
+  <div class="skills-radar-chart" data-testid="skills-radar">
     <svg
       viewBox="0 0 400 400"
       preserveAspectRatio="xMidYMid meet"
@@ -34,6 +34,7 @@
       <!-- Ghost baseline polygon -->
       <polygon
         v-if="showBaseline && hasBaseline"
+        data-testid="radar-baseline"
         :points="baselinePoints"
         fill="none"
         stroke="var(--text-secondary)"
@@ -45,6 +46,7 @@
       <!-- Current score polygon — requires ≥3 points to form a valid shape -->
       <polygon
         v-if="activeSkills.length >= 3"
+        data-testid="radar-current"
         :points="polygonPoints"
         fill="var(--accent-primary)"
         fill-opacity="0.15"
@@ -55,6 +57,7 @@
       <!-- Empty state: no scored skills -->
       <text
         v-if="activeSkills.length === 0"
+        data-testid="radar-empty"
         :x="CENTER_X"
         :y="CENTER_Y"
         text-anchor="middle"
@@ -179,10 +182,15 @@
         </tr>
       </thead>
       <tbody>
-        <tr v-for="s in skills" :key="s.skillCode">
+        <tr
+          v-for="s in skills"
+          :key="s.skillCode"
+          data-testid="radar-row"
+          :data-skill="s.skillCode"
+        >
           <td>{{ s.skillCode }}</td>
-          <td>{{ s.compositeScore ?? '—' }}</td>
-          <td>{{ s.baselineScore ?? '—' }}</td>
+          <td data-testid="radar-row-score">{{ s.compositeScore ?? '—' }}</td>
+          <td data-testid="radar-row-baseline">{{ s.baselineScore ?? '—' }}</td>
           <td>{{ deltaText(s) ?? '—' }}</td>
         </tr>
       </tbody>

@@ -522,6 +522,50 @@ describe('booking.store — loadAvailability coachPriced (fix/booking-price-and-
   })
 })
 
+// Found by Pitchside SES-08: an earlier load that lands last must not overwrite the newer one.
+describe('booking.store — loadAvailability keeps only the latest response', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    vi.clearAllMocks()
+  })
+
+  it('a slower earlier load does not overwrite a later one, nor end its loading state', async () => {
+    let resolveOld
+    let resolveNew
+    getCoachAvailability
+      .mockReturnValueOnce(new Promise((r) => (resolveOld = r)))
+      .mockReturnValueOnce(new Promise((r) => (resolveNew = r)))
+    const store = useBookingStore()
+
+    const older = store.loadAvailability('c1', '2026-03-09')
+    const newer = store.loadAvailability('c1', '2026-03-16')
+    resolveNew({ windows: [{ id: 'new' }], blocks: [], computedSlots: [] })
+    await newer
+    expect(store.loading).toBe(false)
+    resolveOld({ windows: [{ id: 'old' }], blocks: [{ id: 'old-block' }], computedSlots: [] })
+    await older
+
+    expect(store.windows).toEqual([{ id: 'new' }])
+    expect(store.blocks).toEqual([])
+    expect(store.weekStart).toBe('2026-03-16')
+  })
+
+  it('an earlier load still in flight does not end the loading state of a later one', async () => {
+    let resolveOld
+    getCoachAvailability
+      .mockReturnValueOnce(new Promise((r) => (resolveOld = r)))
+      .mockReturnValueOnce(new Promise(() => {}))
+    const store = useBookingStore()
+
+    const older = store.loadAvailability('c1', '2026-03-09')
+    store.loadAvailability('c1', '2026-03-16')
+    resolveOld({ windows: [], blocks: [], computedSlots: [] })
+    await older
+
+    expect(store.loading).toBe(true)
+  })
+})
+
 // fix/booking-request-consent: both parent actions refetch the list, like handleCancelBooking.
 describe('booking.store — coach proposal confirm / request withdraw (booking-request-consent)', () => {
   beforeEach(() => {

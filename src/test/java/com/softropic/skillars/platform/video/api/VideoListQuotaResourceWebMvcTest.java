@@ -179,13 +179,19 @@ class VideoListQuotaResourceWebMvcTest {
         when(videoQuotaRepository.findById(PLAYER_OWNER_ID)).thenReturn(Optional.of(quota));
         when(quotaConfigService.getStorageQuotaBytes(PLAYER_OWNER_ID)).thenReturn(5_368_709_120L);
         when(quotaConfigService.getBandwidthQuotaBytesMonthly(PLAYER_OWNER_ID)).thenReturn(10_737_418_240L);
+        when(videoService.maxUploadBytesByType()).thenReturn(
+            java.util.Map.of(com.softropic.skillars.platform.video.contract.VideoType.HOMEWORK, 262_144_000L));
+        when(videoService.allowedMimeTypes()).thenReturn(List.of("video/mp4", "video/webm"));
 
         mockMvc.perform(get("/api/video/quotas/me"))
             .andExpect(status().isOk())
             .andExpect(jsonPath("$.storageUsedBytes").value(500_000_000L))
             .andExpect(jsonPath("$.storageLimitBytes").value(5_368_709_120L))
             .andExpect(jsonPath("$.bandwidthUsedBytes").value(1_000_000_000L))
-            .andExpect(jsonPath("$.bandwidthLimitBytes").value(10_737_418_240L));
+            .andExpect(jsonPath("$.bandwidthLimitBytes").value(10_737_418_240L))
+            // Owner decision 2026-11-07 (Pitchside VID-05): the page checks against the server's limits.
+            .andExpect(jsonPath("$.maxUploadBytes.HOMEWORK").value(262_144_000L))
+            .andExpect(jsonPath("$.allowedMimeTypes[0]").value("video/mp4"));
     }
 
     @Test
@@ -269,27 +275,19 @@ class VideoListQuotaResourceWebMvcTest {
     // ─── V184: coach videos ABOUT a player (subject link) ─────────────────────
 
     @Test
-    void getCoachVideosAboutPlayer_parentOfPlayer_returnsSubjectVideosWithoutFailedOrHidden() throws Exception {
+    void getCoachVideosAboutPlayer_parentOfPlayer_returnsTheShareableSubjectVideos() throws Exception {
         when(playerProfileRepository.existsByIdAndParentId(PLAYER_PROFILE_ID, PARENT_USER_ID)).thenReturn(true);
         Video review = stubVideo("asset-review", OperationalState.READY);
         review.setOwnerId(UUID.randomUUID().toString());
         review.setSubjectBookingId(UUID.randomUUID());
         review.setSubjectPlayerId(PLAYER_PROFILE_ID);
-        when(videoRepository.findBySubjectPlayerIdAndOperationalStateNotInOrderByCreatedAtDesc(eq(PLAYER_PROFILE_ID), any()))
-            .thenReturn(List.of(review));
+        when(videoSubjectService.shareableForSubject(PLAYER_PROFILE_ID)).thenReturn(List.of(review));
 
         mockMvc.perform(get("/api/video/players/" + PLAYER_PROFILE_ID + "/coach-videos")
                 .with(authentication(skillarsAuth(PARENT_USER_ID, "ROLE_PARENT"))))
             .andExpect(status().isOk())
             .andExpect(jsonPath("$[0].subjectPlayerId").value(PLAYER_PROFILE_ID))
             .andExpect(jsonPath("$[0].operationalState").value("READY"));
-
-        @SuppressWarnings("unchecked")
-        org.mockito.ArgumentCaptor<Collection<OperationalState>> excluded =
-            org.mockito.ArgumentCaptor.forClass(Collection.class);
-        verify(videoRepository).findBySubjectPlayerIdAndOperationalStateNotInOrderByCreatedAtDesc(eq(PLAYER_PROFILE_ID), excluded.capture());
-        org.assertj.core.api.Assertions.assertThat(excluded.getValue()).contains(OperationalState.FAILED, OperationalState.HIDDEN,
-            OperationalState.LOCKED, OperationalState.PURGED);
     }
 
     @Test
@@ -300,20 +298,19 @@ class VideoListQuotaResourceWebMvcTest {
         mockMvc.perform(get("/api/video/players/" + PLAYER_PROFILE_ID + "/coach-videos")
                 .with(authentication(skillarsAuth(PARENT_USER_ID, "ROLE_PARENT"))))
             .andExpect(status().isForbidden());
-        verify(videoRepository, never()).findBySubjectPlayerIdAndOperationalStateNotInOrderByCreatedAtDesc(any(), any());
+        verify(videoSubjectService, never()).shareableForSubject(any());
     }
 
     @Test
     @WithMockUser(roles = "PLAYER")
     void getMyCoachVideos_selfRegisteredPlayer_scopedToOwnProfile() throws Exception {
         stubPlayerPrincipal(PLAYER_PROFILE_ID);
-        when(videoRepository.findBySubjectPlayerIdAndOperationalStateNotInOrderByCreatedAtDesc(eq(PLAYER_PROFILE_ID), any()))
-            .thenReturn(List.of());
+        when(videoSubjectService.shareableForSubject(PLAYER_PROFILE_ID)).thenReturn(List.of());
 
         mockMvc.perform(get("/api/video/my/coach-videos"))
             .andExpect(status().isOk())
             .andExpect(jsonPath("$").isEmpty());
-        verify(videoRepository).findBySubjectPlayerIdAndOperationalStateNotInOrderByCreatedAtDesc(eq(PLAYER_PROFILE_ID), any());
+        verify(videoSubjectService).shareableForSubject(PLAYER_PROFILE_ID);
     }
 
     // ─── POST /api/video/{id}/retry ──────────────────────────────────────────

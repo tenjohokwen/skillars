@@ -1,6 +1,10 @@
 <template>
   <q-dialog :model-value="modelValue" @update:model-value="onDialogToggle">
-    <q-card class="session-recap-dialog" style="min-width: 360px; max-width: 560px; width: 100%">
+    <q-card
+      class="session-recap-dialog"
+      data-testid="recap-dialog"
+      style="min-width: 360px; max-width: 560px; width: 100%"
+    >
       <q-card-section class="row items-center q-pb-none">
         <div class="text-h6">{{ t('booking.recap.dialogTitle', { name: playerName }) }}</div>
         <q-space />
@@ -59,6 +63,7 @@
             v-else-if="untilLabel"
             class="text-caption q-mb-md"
             style="color: var(--text-secondary)"
+            data-testid="recap-editable-until"
           >
             {{ t('booking.recap.editableUntil', { date: untilLabel }) }}
           </div>
