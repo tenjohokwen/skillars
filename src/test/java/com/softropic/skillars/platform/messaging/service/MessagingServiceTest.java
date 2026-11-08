@@ -246,7 +246,8 @@ class MessagingServiceTest {
         Conversation c = conv(CONVERSATION_ID, coachId, PLAYER_ID);
         c.setParentId(PARENT_USER_ID);
         when(conversationRepository.findById(CONVERSATION_ID)).thenReturn(Optional.of(c));
-        when(agePolicyService.getMessagingPolicy(PLAYER_ID)).thenReturn(MessagingPolicy.unrestricted());
+        // master's guard (#479) reads findMessagingPolicy, so a missing player row never refuses the parent.
+        when(agePolicyService.findMessagingPolicy(PLAYER_ID)).thenReturn(Optional.of(MessagingPolicy.unrestricted()));
 
         assertThatThrownBy(() -> messagingService.getConversation(CONVERSATION_ID, PARENT_USER_ID, "PARENT"))
             .isInstanceOf(OperationNotAllowedException.class)
