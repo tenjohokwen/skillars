@@ -2,7 +2,6 @@ package com.softropic.skillars.platform.payment.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.softropic.skillars.platform.outbox.contract.OutboxMessageHandler;
-import com.softropic.skillars.platform.payment.repo.StripeCustomer;
 import com.softropic.skillars.platform.payment.repo.StripeCustomerRepository;
 import com.softropic.skillars.platform.payment.service.PaymentMethodSyncOutboxSupport.PaymentMethodSyncPayload;
 import com.softropic.skillars.platform.security.repo.User;
@@ -64,7 +63,9 @@ public class PaymentMethodSyncOutboxHandler implements OutboxMessageHandler {
         } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
             throw new UncheckedIOException(e);
         }
-        stripeCustomerRepository.findById(p.userId()).map(StripeCustomer::getStripeCustomerId)
+        // Review round 5: the id only, so the superseded-card check in syncPaymentMethodToSubscriptions reads the row after
+        // the lock wait rather than an entity cached before it (an older card's sync would otherwise win over a newer one).
+        stripeCustomerRepository.findStripeCustomerIdByParentId(p.userId())
             .filter(id -> !id.isBlank())
             .ifPresent(stripeCustomerRepository::acquireCustomerOutboxLock);
         Optional<User> user = userRepository.findOneById(p.userId());

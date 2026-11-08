@@ -116,6 +116,14 @@ public interface StripeCustomerRepository extends JpaRepository<StripeCustomer, 
         nativeQuery = true)
     void acquireCustomerOutboxLock(@Param("stripeCustomerId") String stripeCustomerId);
 
+    /**
+     * skillars-deferred-176 review round 5: the Stripe customer id only, for a handler that needs the
+     * {@link #acquireCustomerOutboxLock} key before it reads the row. A scalar query puts no entity in the persistence
+     * context, so a {@code findById} after the lock wait reads what committed meanwhile instead of a cached copy.
+     */
+    @Query("SELECT c.stripeCustomerId FROM StripeCustomer c WHERE c.parentId = :parentId")
+    Optional<String> findStripeCustomerIdByParentId(@Param("parentId") Long parentId);
+
     /** {@code pg_advisory_xact_lock(int, int)} namespace for {@link #acquireCustomerOutboxLock} ("SCUL"). */
     int CUSTOMER_OUTBOX_LOCK_NAMESPACE = 0x5343554C;
 }

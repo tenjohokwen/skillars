@@ -1,7 +1,6 @@
 package com.softropic.skillars.platform.payment.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.softropic.skillars.platform.payment.repo.StripeCustomer;
 import com.softropic.skillars.platform.payment.repo.StripeCustomerRepository;
 import com.softropic.skillars.platform.security.repo.User;
 import com.softropic.skillars.platform.security.repo.UserRepository;
@@ -10,7 +9,6 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InOrder;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
-import org.springframework.test.util.ReflectionTestUtils;
 
 import java.util.Optional;
 
@@ -37,9 +35,7 @@ class PaymentMethodSyncOutboxHandlerTest {
     }
 
     private void customer() {
-        StripeCustomer c = new StripeCustomer();
-        ReflectionTestUtils.setField(c, "stripeCustomerId", CUS);
-        when(stripeCustomerRepository.findById(USER_ID)).thenReturn(Optional.of(c));
+        when(stripeCustomerRepository.findStripeCustomerIdByParentId(USER_ID)).thenReturn(Optional.of(CUS));
     }
 
     private void user(String email) {
@@ -59,6 +55,8 @@ class PaymentMethodSyncOutboxHandlerTest {
         order.verify(stripeCustomerRepository).acquireCustomerOutboxLock(CUS);
         order.verify(userRepository).findOneById(USER_ID);
         order.verify(subscriptionService).syncPaymentMethodToSubscriptions(USER_ID, "pm_new");
+        // Review round 5: no entity loaded before the lock, so the superseded-card check reads the row fresh.
+        verify(stripeCustomerRepository, never()).findById(any());
     }
 
     @Test
@@ -83,7 +81,7 @@ class PaymentMethodSyncOutboxHandlerTest {
 
     @Test
     void noCustomerRow_takesNoLock_butStillSyncsALivePayer() {
-        when(stripeCustomerRepository.findById(USER_ID)).thenReturn(Optional.empty());
+        when(stripeCustomerRepository.findStripeCustomerIdByParentId(USER_ID)).thenReturn(Optional.empty());
         user("me@example.com");
 
         handler().handle(PAYLOAD);

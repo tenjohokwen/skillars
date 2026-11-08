@@ -125,6 +125,33 @@ class StripeCustomerRepositoryIT extends AbstractIntegrationTest {
         org.assertj.core.api.Assertions.assertThat(cardOf()).isEqualTo("pm_new");
     }
 
+    // ── skillars-deferred-176 review round 5: the card sync's lock key is read without caching the row ─────────────
+
+    /** What the card sync's superseded check reads, inside one transaction, after another transaction saved a newer card. */
+    private String cardSeenAfterAConcurrentSave(java.util.function.Consumer<Long> readBeforeTheLock) throws Exception {
+        savePayer("pm_old");
+        return transactionTemplate.execute(s -> {
+            readBeforeTheLock.accept(PAYER);
+            java.util.concurrent.CompletableFuture.runAsync(
+                () -> commit("UPDATE payment.stripe_customers SET stripe_payment_method_id = 'pm_newer' WHERE parent_id = ?", PAYER))
+                .join();
+            return cardOf();
+        });
+    }
+
+    @Test
+    void theLockKeyQuery_cachesNoRow_soTheCheckAfterTheLockSeesTheNewerCard() throws Exception {
+        org.assertj.core.api.Assertions.assertThat(
+            cardSeenAfterAConcurrentSave(stripeCustomerRepository::findStripeCustomerIdByParentId)).isEqualTo("pm_newer");
+    }
+
+    /** The defect: loading the entity for the lock key left the pre-wait copy for the check, so the older card won. */
+    @Test
+    void loadingTheEntityForTheLockKey_wouldLeaveTheCheckAStaleCard() throws Exception {
+        org.assertj.core.api.Assertions.assertThat(
+            cardSeenAfterAConcurrentSave(stripeCustomerRepository::findById)).isEqualTo("pm_old");
+    }
+
     // ── skillars-deferred-176 AC3 (RS09h): a card reapply racing a GDPR erasure ────────────────────────────────
 
     private static final long ERASED = 9_640_000_176L;
