@@ -104,3 +104,8 @@ Claude Opus 5.5 (claude-opus-5-5)
 ### Change Log
 
 - 2026-11-08: created from RS06f/g/h/j; D17-D20 option 1; implemented T1-T5.
+- 2026-11-08: `/pr-review` round 1 (f56f15a4): an unknown charge outcome on an attempt the resolver closed meanwhile raises
+  `[PACK_PURCHASE_LATE_CAPTURE]` (general, medium); a refused-before-charge request reverts the card it wrote (both
+  reviewers); a pending refund keeps the capture state unreadable instead of reading as captured (general, medium); a
+  failing refund page is a lookup failure (general); an empty key search proves absence only for a charge past
+  `SEARCH_SETTLE` (1 h), since Search is eventually consistent (both reviewers).

@@ -889,6 +889,27 @@ class StripePaymentGatewayTest {
     }
 
     @Test
+    void getCaptureState_noChargeObject_aRefundStillPending_staysUnreadable() throws StripeException {
+        PaymentIntent pi = mockIntent("pi_cs6");
+        pi.setAmountReceived(5000L);
+        when(stripeClient.retrievePaymentIntentWithLatestCharge("pi_cs6")).thenReturn(pi);
+        when(stripeClient.listRefundsForPaymentIntent("pi_cs6")).thenReturn(java.util.List.of(refund(5000L, "pending")));
+
+        assertThat(stripePaymentGateway.getCaptureState("pi_cs6").unreadable()).isTrue();
+    }
+
+    @Test
+    void getCaptureState_aRefundPageFailingMidway_isALookupFailure() throws StripeException {
+        PaymentIntent pi = mockIntent("pi_cs7");
+        pi.setAmountReceived(5000L);
+        when(stripeClient.retrievePaymentIntentWithLatestCharge("pi_cs7")).thenReturn(pi);
+        when(stripeClient.listRefundsForPaymentIntent("pi_cs7")).thenThrow(new IllegalStateException("page 2 failed"));
+
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> stripePaymentGateway.getCaptureState("pi_cs7"))
+            .isInstanceOf(PaymentGatewayException.class).hasMessage("payment.refundLookupFailed");
+    }
+
+    @Test
     void getRefundableAmount_noChargeYet_isZero() throws StripeException {
         when(stripeClient.retrievePaymentIntentWithLatestCharge("pi_9")).thenReturn(mockIntent("pi_9"));
 
@@ -1127,6 +1148,22 @@ class StripePaymentGatewayTest {
 
         assertThat(found).isPresent();
         assertThat(found.get().paymentIntentId()).isEqualTo("pi_found");
+    }
+
+    @Test
+    void findChargeByIdempotencyKey_searchFallbackEmpty_provesAbsenceOnlyOnceSettled() throws StripeException {
+        stubStripeCustomer(1001L, "cus_deleted");
+        when(stripeClient.listPaymentIntentsForCustomer(org.mockito.ArgumentMatchers.eq("cus_deleted"),
+                org.mockito.ArgumentMatchers.anyLong()))
+            .thenThrow(new com.stripe.exception.InvalidRequestException("No such customer", "customer", "req", "resource_missing", 404, null));
+        when(stripeClient.searchPaymentIntentsByMetadata("chargeKey", "pack-k")).thenReturn(java.util.List.of());
+
+        // too recent for the eventually consistent search: no verdict
+        org.assertj.core.api.Assertions.assertThatThrownBy(() ->
+                stripePaymentGateway.findChargeByIdempotencyKey(1001L, "pack-k", Instant.now().minusSeconds(600)))
+            .isInstanceOf(PaymentGatewayException.class).hasMessage("payment.chargeLookupFailed");
+        // past the settle window: a proven absence
+        assertThat(stripePaymentGateway.findChargeByIdempotencyKey(1001L, "pack-k", Instant.now().minusSeconds(7200))).isEmpty();
     }
 
     @Test

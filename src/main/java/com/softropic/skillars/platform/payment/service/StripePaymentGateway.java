@@ -339,7 +339,7 @@ public class StripePaymentGateway implements PaymentGateway {
             if (isPermanentLookupFailure(e)) {
                 // skillars-deferred-178 (RS06h): the customer-scoped list can never succeed again (the customer was deleted
                 // at Stripe); search by the charge key, which does not go through the customer.
-                return searchChargeByKey(parentId, idempotencyKey, e);
+                return searchChargeByKey(parentId, idempotencyKey, createdAfter, e);
             }
             log.error("Stripe charge lookup failed: parentId={} key={} error={}", parentId, idempotencyKey, e.getMessage());
             throw new PaymentGatewayException("payment.chargeLookupFailed", e);
@@ -350,13 +350,25 @@ public class StripePaymentGateway implements PaymentGateway {
         }
     }
 
-    private Optional<ChargeLookup> searchChargeByKey(Long parentId, String idempotencyKey, StripeException listFailure) {
+    /** How long after a charge an empty key search is trusted as "never charged" (Stripe Search lags about a minute). */
+    static final java.time.Duration SEARCH_SETTLE = java.time.Duration.ofHours(1);
+
+    private Optional<ChargeLookup> searchChargeByKey(Long parentId, String idempotencyKey, Instant createdAfter,
+                                                     StripeException listFailure) {
         log.warn("[STRIPE_CHARGE_LOOKUP_SEARCH_FALLBACK] customer-scoped list failed permanently, searching by key: "
             + "parentId={} key={} error={}", parentId, idempotencyKey, listFailure.getMessage());
         try {
-            return stripeClient.searchPaymentIntentsByMetadata(CHARGE_KEY_METADATA, idempotencyKey).stream()
+            Optional<ChargeLookup> found = stripeClient.searchPaymentIntentsByMetadata(CHARGE_KEY_METADATA, idempotencyKey).stream()
                 .filter(pi -> pi.getMetadata() != null && idempotencyKey.equals(pi.getMetadata().get(CHARGE_KEY_METADATA)))
                 .findFirst().map(StripePaymentGateway::toLookup);
+            // Review round 1: Search is eventually consistent, so an empty result proves absence only for a charge old enough
+            // to have been indexed; a younger one stays a lookup failure and is asked again later.
+            if (found.isEmpty() && createdAfter.isAfter(Instant.now().minus(SEARCH_SETTLE))) {
+                throw new PaymentGatewayException("payment.chargeLookupFailed");
+            }
+            return found;
+        } catch (PaymentGatewayException e) {
+            throw e;
         } catch (StripeException | RuntimeException e) {
             log.error("Stripe charge search failed: parentId={} key={} error={}", parentId, idempotencyKey, e.getMessage());
             throw new PaymentGatewayException("payment.chargeLookupFailed", e);
@@ -624,6 +636,10 @@ public class StripePaymentGateway implements PaymentGateway {
             log.error("Stripe capture-state lookup failed: intentId={} error={}", stripePaymentIntentId, e.getMessage());
             throw new PaymentGatewayException(isPermanentLookupFailure(e)
                 ? PaymentGateway.REFUND_TARGET_INVALID : "payment.refundLookupFailed");
+        } catch (RuntimeException e) {
+            // Review round 1: auto-paging the refund list wraps a later page's StripeException in an unchecked one.
+            log.error("Stripe capture-state lookup failed: intentId={} error={}", stripePaymentIntentId, e.getMessage());
+            throw new PaymentGatewayException("payment.refundLookupFailed", e);
         }
     }
 
@@ -637,7 +653,13 @@ public class StripePaymentGateway implements PaymentGateway {
         if (received == null || received <= 0L) {
             return new CaptureState(null, BigDecimal.ZERO);
         }
-        long refunded = stripeClient.listRefundsForPaymentIntent(pi.getId()).stream()
+        java.util.List<com.stripe.model.Refund> refunds = stripeClient.listRefundsForPaymentIntent(pi.getId());
+        // Review round 1: a refund still in flight decides nothing yet; counting it as "not refunded" would create a pack
+        // for money that is on its way back.
+        if (refunds.stream().anyMatch(r -> "pending".equals(r.getStatus()) || "requires_action".equals(r.getStatus()))) {
+            return new CaptureState(null, BigDecimal.ZERO);
+        }
+        long refunded = refunds.stream()
             .filter(r -> "succeeded".equals(r.getStatus()) && r.getAmount() != null)
             .mapToLong(com.stripe.model.Refund::getAmount).sum();
         log.warn("[STRIPE_CAPTURE_STATE_FROM_REFUNDS] intentId={} received={} refunded={} (no readable charge object)",

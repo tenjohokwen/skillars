@@ -238,6 +238,12 @@ public class SessionPackPaymentService {
         if (attemptRepository.existsByIdAndStatusNot(attempt.getId(), Status.IN_PROGRESS)) {
             log.error("[PACK_PURCHASE_ATTEMPT_CLOSED_BEFORE_CHARGE] attemptId={} parentId={} — the resolver closed it while "
                 + "this request stalled; not charged", attempt.getId(), parentId);
+            // Review round 1: the resolver's own revert ran before this request wrote the named card, so it reverted nothing.
+            try {
+                revertDeclinedCard(attempt);
+            } catch (RuntimeException e) {
+                log.error("[PACK_PURCHASE_CARD_REVERT_FAILED] attemptId={} parentId={}", attempt.getId(), parentId, e);
+            }
             throw new PackNoChargeException(null);
         }
         try {
@@ -681,8 +687,16 @@ public class SessionPackPaymentService {
             + "uncharged; check the parent for a second pack bought meanwhile", attemptId, parentId, paymentIntentId);
     }
 
+    /**
+     * After a charge whose outcome is unknown. skillars-deferred-178 (review round 1): when the attempt already left IN_PROGRESS
+     * (the resolver judged it uncharged while this request stalled), the row stays closed and nothing revisits it, so a capture
+     * Stripe may have made would go unseen: raise the late-capture alert for an operator to check.
+     */
     private void markOpen(SessionPackPurchaseAttempt a, Status to) {
-        markQuietly(a, to, null, Set.of(Status.IN_PROGRESS));
+        if (!markQuietly(a, to, null, Set.of(Status.IN_PROGRESS))
+                && attemptRepository.existsByIdAndStatusNot(a.getId(), Status.IN_PROGRESS)) {
+            lateCapture(a.getId(), a.getParentId(), "unknown (charge outcome unknown)");
+        }
     }
 
     /** True when the write landed. */
