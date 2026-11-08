@@ -1,6 +1,6 @@
 <template>
   <q-page class="q-pa-md">
-    <div class="app-page fade-in">
+    <div class="app-page fade-in" data-testid="admin-finance-page">
       <div class="page-header q-mb-lg">
         <div class="text-page-title">{{ t('admin.finance.title') }}</div>
         <div class="text-meta">{{ t('admin.finance.subtitle') }}</div>

@@ -1,6 +1,6 @@
 <template>
   <q-page class="q-pa-md">
-    <div class="app-page fade-in">
+    <div class="app-page fade-in" data-testid="admin-safeguarding-page">
       <div class="page-header q-mb-xl">
         <div class="text-page-title">{{ t('safeguarding.admin.title') }}</div>
         <div class="text-meta">{{ t('safeguarding.admin.subtitle') }}</div>
@@ -72,6 +72,7 @@
               color="positive"
               :label="t('safeguarding.admin.inspect')"
               data-testid="safeguarding-inspect-btn"
+              :data-coach-id="props.row.coachId"
               @click="openAction('inspect', props.row)"
             />
             <q-btn
@@ -82,6 +83,7 @@
               color="negative"
               :label="t('safeguarding.admin.reject')"
               data-testid="safeguarding-reject-btn"
+              :data-coach-id="props.row.coachId"
               @click="openAction('reject', props.row)"
             />
           </q-td>
@@ -116,6 +118,7 @@
               color="negative"
               :label="t('safeguarding.admin.revoke')"
               data-testid="safeguarding-revoke-btn"
+              :data-coach-id="props.row.coachId"
               @click="openAction('revoke', props.row)"
             />
           </q-td>

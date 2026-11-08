@@ -2027,4 +2027,82 @@ export class Provisioner {
       await self.dispose()
     }
   }
+
+  // ─── Suite R: admin console ──────────────────────────────────────────────────────────────────
+
+  /** One login attempt through the API, as the login form makes it. Returns the HTTP status (200, 401, 429…). */
+  async loginStatus(email: string, password: string): Promise<number> {
+    const host = new URL(E2E.baseUrl)
+    const context = await request.newContext({
+      storageState: {
+        cookies: [
+          {
+            name: 'fcookie',
+            value: fingerprintFor(email),
+            domain: host.hostname,
+            path: '/',
+            expires: -1,
+            httpOnly: false,
+            secure: false,
+            sameSite: 'Lax',
+          },
+        ],
+        origins: [],
+      },
+    })
+    try {
+      const response = await this.api(context).post('/auth/login', {
+        data: { email, password },
+        expectStatus: () => true,
+      })
+      return response.status()
+    } finally {
+      await context.dispose()
+    }
+  }
+
+  /** The coach appeals one of their strikes (POST /api/appeals), as the reliability page does. Returns nothing. */
+  async appealStrike(
+    coach: CoachAccount,
+    strikeId: string,
+    reason = 'I was there on time.',
+  ): Promise<void> {
+    const session = await this.login(coach)
+    try {
+      await session.api.post('/appeals', {
+        data: { subjectType: 'RELIABILITY_STRIKE', subjectId: strikeId, reason },
+        expectStatus: (status) => status >= 200 && status < 300,
+      })
+    } finally {
+      await session.dispose()
+    }
+  }
+
+  /** Revoke a coach's safeguarding record as the bootstrap admin (cleanup: records accumulate on a long-lived stack). */
+  async revokeSafeguarding(coach: CoachAccount): Promise<void> {
+    const admin = await this.login({ email: E2E.adminEmail, password: E2E.adminPassword })
+    try {
+      await admin.api.delete(`/admin/safeguarding/records/${coach.coachId}`, {
+        data: { reason: 'e2e cleanup' },
+        expectStatus: (status) => (status >= 200 && status < 300) || status === 404,
+      })
+    } finally {
+      await admin.dispose()
+    }
+  }
+
+  /**
+   * A GDPR request that has sat PROCESSING since `daysAgo` days (a stuck job): what the tracker flags as overdue
+   * past 30 days. SQL seam. Returns its id.
+   */
+  async seedStuckGdprRequest(user: { userId: string }, daysAgo: number): Promise<string> {
+    const sql = await this.sql()
+    const [row] = await sql.query<{ id: string }>(
+      `INSERT INTO admin.gdpr_requests (user_id, request_type, status, created_at)
+       VALUES ($1::bigint, 'EXPORT', 'PROCESSING', now() - make_interval(days => $2::int))
+       RETURNING id`,
+      [user.userId, daysAgo],
+    )
+    return row!.id
+  }
 }

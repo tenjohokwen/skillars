@@ -56,6 +56,23 @@ describe('AdminGdprRequestsPage.vue', () => {
     expect(wrapper.vm.rows).toHaveLength(1)
   })
 
+  it('a slow unfiltered load that answers after a filtered one does not overwrite the filtered rows', async () => {
+    let answerFirst
+    adminApi.getGdprRequests
+      .mockImplementationOnce(() => new Promise((resolve) => (answerFirst = resolve)))
+      .mockResolvedValueOnce({ content: [row({ status: 'PROCESSING' })], totalPages: 1 })
+    const wrapper = mount(AdminGdprRequestsPage)
+    mounted.push(wrapper)
+    wrapper.vm.statusFilter = 'PROCESSING'
+    await wrapper.vm.onFilterChange()
+    answerFirst({ content: [row(), row({ requestId: 'b' })], totalPages: 1 })
+    await flushPromises()
+
+    expect(wrapper.vm.rows).toHaveLength(1)
+    expect(wrapper.vm.rows[0].status).toBe('PROCESSING')
+    expect(wrapper.vm.loading).toBe(false)
+  })
+
   it('changing a filter reloads from page 0 with both filters', async () => {
     const wrapper = await mountPage()
     wrapper.vm.currentPage = 3

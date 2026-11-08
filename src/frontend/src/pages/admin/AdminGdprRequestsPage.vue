@@ -1,6 +1,6 @@
 <template>
   <q-page class="q-pa-md">
-    <div class="app-page fade-in">
+    <div class="app-page fade-in" data-testid="admin-gdpr-page">
       <div class="page-header q-mb-lg">
         <div class="text-page-title">{{ t('admin.gdpr.title') }}</div>
         <div class="text-meta">{{ t('admin.gdpr.subtitle') }}</div>
@@ -63,7 +63,7 @@
           <q-td :props="props">{{ typeLabel(props.row.requestType) }}</q-td>
         </template>
         <template #body-cell-status="props">
-          <q-td :props="props">
+          <q-td :props="props" data-testid="gdpr-row-status" :data-request-id="props.row.requestId">
             <q-chip dense :color="statusColor(props.row.status)" text-color="white">
               {{ statusLabel(props.row.status) }}
             </q-chip>
@@ -183,7 +183,12 @@ function shortId(id) {
 
 onMounted(loadList)
 
+// Only the latest load may write the list: the unfiltered load on mount can answer after a filter's load,
+// and used to overwrite the filtered rows with unfiltered ones (Pitchside ADM-15).
+let latestLoad = 0
+
 async function loadList() {
+  const call = ++latestLoad
   loading.value = true
   loadError.value = false
   try {
@@ -193,6 +198,7 @@ async function loadList() {
       page: currentPage.value - 1,
       size: PAGE_SIZE,
     })
+    if (call !== latestLoad) return
     if (resp.content.length === 0 && currentPage.value > 1 && resp.totalPages > 0) {
       currentPage.value = Math.min(currentPage.value - 1, resp.totalPages)
       return loadList()
@@ -200,9 +206,9 @@ async function loadList() {
     rows.value = resp.content
     totalPages.value = resp.totalPages
   } catch {
-    loadError.value = true
+    if (call === latestLoad) loadError.value = true
   } finally {
-    loading.value = false
+    if (call === latestLoad) loading.value = false
   }
 }
 

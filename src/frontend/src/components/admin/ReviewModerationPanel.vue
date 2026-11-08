@@ -34,6 +34,7 @@
             color="primary"
             :label="t('admin.reviewModeration.view')"
             data-testid="review-row-view-btn"
+            :data-review-id="props.row.reviewId"
             @click="openDetail(props.row)"
           />
         </q-td>

@@ -1,6 +1,6 @@
 <template>
   <q-page class="q-pa-md">
-    <div class="app-page fade-in">
+    <div class="app-page fade-in" data-testid="admin-appeals-page">
       <div class="page-header q-mb-xl">
         <div class="text-page-title">{{ t('admin.appeals.title') }}</div>
         <div class="text-meta">{{ t('admin.appeals.subtitle') }}</div>
@@ -58,6 +58,7 @@
               color="primary"
               :label="t('admin.appeals.view')"
               data-testid="appeal-row-view-btn"
+              :data-appeal-id="props.row.appealId"
               @click="openDetail(props.row.appealId)"
             />
           </q-td>

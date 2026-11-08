@@ -483,7 +483,12 @@
             {{ $t('nav.adminLimitedNote') }}
           </div>
 
-          <q-item clickable to="/admin/health-dashboard" class="nav-item">
+          <q-item
+            clickable
+            to="/admin/health-dashboard"
+            class="nav-item"
+            data-testid="nav-admin-health-dashboard"
+          >
             <q-item-section avatar>
               <q-icon name="monitor_heart" class="nav-icon" />
             </q-item-section>
@@ -493,7 +498,7 @@
           </q-item>
 
           <!-- skillars-deferred-165 AC3 -->
-          <q-item clickable to="/admin/disputes" class="nav-item">
+          <q-item clickable to="/admin/disputes" class="nav-item" data-testid="nav-admin-disputes">
             <q-item-section avatar>
               <q-icon name="gavel" class="nav-icon" />
             </q-item-section>
@@ -502,7 +507,12 @@
             </q-item-section>
           </q-item>
 
-          <q-item clickable to="/admin/moderation" class="nav-item">
+          <q-item
+            clickable
+            to="/admin/moderation"
+            class="nav-item"
+            data-testid="nav-admin-moderation"
+          >
             <q-item-section avatar>
               <q-icon name="shield" class="nav-icon" />
             </q-item-section>
@@ -511,7 +521,7 @@
             </q-item-section>
           </q-item>
 
-          <q-item clickable to="/admin/coaches" class="nav-item">
+          <q-item clickable to="/admin/coaches" class="nav-item" data-testid="nav-admin-coaches">
             <q-item-section avatar>
               <q-icon name="sports" class="nav-icon" />
             </q-item-section>
@@ -520,7 +530,13 @@
             </q-item-section>
           </q-item>
 
-          <q-item clickable to="/admin/safeguarding" class="nav-item">
+          <q-item
+            v-if="!authStore.limitedAdmin"
+            clickable
+            to="/admin/safeguarding"
+            class="nav-item"
+            data-testid="nav-admin-safeguarding"
+          >
             <q-item-section avatar>
               <q-icon name="mdi-shield-account-outline" class="nav-icon" />
             </q-item-section>
@@ -529,7 +545,7 @@
             </q-item-section>
           </q-item>
 
-          <q-item clickable to="/admin/users" class="nav-item">
+          <q-item clickable to="/admin/users" class="nav-item" data-testid="nav-admin-users">
             <q-item-section avatar>
               <q-icon name="manage_accounts" class="nav-icon" />
             </q-item-section>
@@ -539,7 +555,7 @@
           </q-item>
 
           <!-- FR-ADM-004 appeals queue -->
-          <q-item clickable to="/admin/appeals" class="nav-item">
+          <q-item clickable to="/admin/appeals" class="nav-item" data-testid="nav-admin-appeals">
             <q-item-section avatar>
               <q-icon name="balance" class="nav-icon" />
             </q-item-section>
@@ -551,7 +567,7 @@
           <!-- Admin operations: video ops, stuck bookings, finance, GDPR tracker, platform config -->
           <div class="text-label q-px-md q-mt-lg q-mb-sm">{{ $t('nav.groupAdminOperations') }}</div>
 
-          <q-item clickable to="/admin/videos" class="nav-item">
+          <q-item clickable to="/admin/videos" class="nav-item" data-testid="nav-admin-videos">
             <q-item-section avatar>
               <q-icon name="video_library" class="nav-icon" />
             </q-item-section>
@@ -560,7 +576,7 @@
             </q-item-section>
           </q-item>
 
-          <q-item clickable to="/admin/bookings" class="nav-item">
+          <q-item clickable to="/admin/bookings" class="nav-item" data-testid="nav-admin-bookings">
             <q-item-section avatar>
               <q-icon name="event_available" class="nav-icon" />
             </q-item-section>
@@ -569,7 +585,13 @@
             </q-item-section>
           </q-item>
 
-          <q-item v-if="!authStore.limitedAdmin" clickable to="/admin/finance" class="nav-item">
+          <q-item
+            v-if="!authStore.limitedAdmin"
+            clickable
+            to="/admin/finance"
+            class="nav-item"
+            data-testid="nav-admin-finance"
+          >
             <q-item-section avatar>
               <q-icon name="payments" class="nav-icon" />
             </q-item-section>
@@ -578,7 +600,13 @@
             </q-item-section>
           </q-item>
 
-          <q-item v-if="!authStore.limitedAdmin" clickable to="/admin/gdpr" class="nav-item">
+          <q-item
+            v-if="!authStore.limitedAdmin"
+            clickable
+            to="/admin/gdpr"
+            class="nav-item"
+            data-testid="nav-admin-gdpr"
+          >
             <q-item-section avatar>
               <q-icon name="privacy_tip" class="nav-icon" />
             </q-item-section>
@@ -587,7 +615,13 @@
             </q-item-section>
           </q-item>
 
-          <q-item v-if="!authStore.limitedAdmin" clickable to="/admin/config" class="nav-item">
+          <q-item
+            v-if="!authStore.limitedAdmin"
+            clickable
+            to="/admin/config"
+            class="nav-item"
+            data-testid="nav-admin-config"
+          >
             <q-item-section avatar>
               <q-icon name="tune" class="nav-icon" />
             </q-item-section>

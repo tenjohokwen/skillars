@@ -1,6 +1,6 @@
 <template>
   <q-page class="q-pa-md">
-    <div class="app-page fade-in">
+    <div class="app-page fade-in" data-testid="admin-moderation-page">
       <div class="page-header q-mb-lg">
         <div class="text-page-title">{{ t('admin.moderation.title') }}</div>
         <div class="text-meta">{{ t('admin.moderation.subtitle') }}</div>
@@ -75,6 +75,7 @@
                   color="primary"
                   :label="t('admin.moderation.reviewMessage')"
                   data-testid="alert-open-message-btn"
+                  :data-reference-id="props.row.referenceId"
                   @click="openMessage(props.row.referenceId)"
                 />
                 <q-btn

@@ -281,6 +281,7 @@ test.describe('Q · Coach safeguarding check', () => {
       await own.request().click()
       await expect(own.pending()).toContainText(t('safeguarding.coach.noUploadNote'))
 
+      // The record is revoked afterwards: on a long-lived stack, valid records would pile up ahead of ADM-14's.
       const validUntil = await provision.inspectSafeguarding(coach)
       const [year, month] = validUntil.split('-')
       const shown = `${month}/${year}`
@@ -299,6 +300,7 @@ test.describe('Q · Coach safeguarding check', () => {
       await expect(profile.safeguardingBadge()).toContainText(
         t('safeguarding.badge.onRecord', { date: shown }),
       )
+      await provision.revokeSafeguarding(coach)
     },
   )
 })
