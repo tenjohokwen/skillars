@@ -1,7 +1,11 @@
 <template>
   <div class="video-list-item row items-start no-wrap" data-testid="video-list-item">
     <div class="col">
-      <div v-if="video.title" class="text-caption text-secondary ellipsis q-mb-xs">
+      <div
+        v-if="video.title"
+        class="text-caption text-secondary ellipsis q-mb-xs"
+        data-testid="video-title"
+      >
         {{ video.title }}
       </div>
       <VideoStatusCard

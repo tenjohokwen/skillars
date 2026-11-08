@@ -375,3 +375,69 @@ describe('VideoManagementPage.vue — minors never upload / coach video subject 
     expect(wrapper.find('[data-testid="coach-videos-section"]').exists()).toBe(false)
   })
 })
+
+// Owner decision 2026-11-07 (Pitchside VID-05, option A): size and type are checked against the
+// server's own limits before any request; and an over-quota upload says so (Pitchside VID-04).
+describe('VideoManagementPage.vue — upload limits from the server', () => {
+  const LIMITED_QUOTA = {
+    ...EMPTY_QUOTA,
+    maxUploadBytes: { HOMEWORK: 250 * 1024 * 1024 },
+    allowedMimeTypes: ['video/mp4', 'video/webm'],
+  }
+
+  async function pickAsPlayer(file) {
+    const { wrapper } = await mountPage()
+    await wrapper.find('[data-testid="player-upload-btn"]').trigger('click')
+    await selectFile(wrapper, file)
+  }
+
+  it('a file over the server limit is refused before any request, naming the limit', async () => {
+    videoApi.getMyVideos.mockResolvedValue([])
+    videoApi.getMyQuota.mockResolvedValue(LIMITED_QUOTA)
+
+    await pickAsPlayer(fakeFile('big.mp4', 300 * 1024 * 1024))
+
+    expect(videoApi.initiatePlayerUpload).not.toHaveBeenCalled()
+    expect(notifySpy).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'negative', message: 'video.management.fileTooLarge' }),
+    )
+  })
+
+  it('a type the server does not accept is refused before any request', async () => {
+    videoApi.getMyVideos.mockResolvedValue([])
+    videoApi.getMyQuota.mockResolvedValue(LIMITED_QUOTA)
+    const pdf = new File(['x'], 'notes.pdf', { type: 'application/pdf' })
+
+    await pickAsPlayer(pdf)
+
+    expect(videoApi.initiatePlayerUpload).not.toHaveBeenCalled()
+    expect(notifySpy).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'negative', message: 'video.management.fileTypeNotAllowed' }),
+    )
+  })
+
+  it('a file within the limits goes ahead', async () => {
+    videoApi.getMyVideos.mockResolvedValue([])
+    videoApi.getMyQuota.mockResolvedValue(LIMITED_QUOTA)
+    videoApi.initiatePlayerUpload.mockResolvedValue(CREDS)
+    videoApi.createTusUpload.mockReturnValue({ start: vi.fn() })
+
+    await pickAsPlayer(fakeFile('ok.mp4', 200 * 1024 * 1024))
+
+    expect(videoApi.initiatePlayerUpload).toHaveBeenCalled()
+  })
+
+  it('an over-quota refusal says the storage is full, not "upload failed"', async () => {
+    videoApi.getMyVideos.mockResolvedValue([])
+    videoApi.getMyQuota.mockResolvedValue(LIMITED_QUOTA)
+    videoApi.initiatePlayerUpload.mockRejectedValue({
+      response: { status: 403, data: { errorMsg: { errorKey: 'QUOTA_EXCEEDED' } } },
+    })
+
+    await pickAsPlayer(fakeFile())
+
+    expect(notifySpy).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'negative', message: 'video.management.quotaExceeded' }),
+    )
+  })
+})
