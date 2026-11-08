@@ -1,6 +1,6 @@
 # Story skillars-deferred-178: Pack-attempt edge cases (stalled capture, unreadable charge, deleted customer, ownership race)
 
-Status: in-progress
+Status: review
 
 <!-- CREATED 2026-11-08 from deferred-work.md (RS section): RS06f, RS06g, RS06h, RS06j, the open residuals of the
      skillars-deferred-169/174 pack-attempt work. Owner chose this bundle on 2026-11-08 ("yes start with Pack-attempt edge
@@ -131,3 +131,6 @@ Claude Opus 5.5 (claude-opus-5-5)
 - 2026-11-08: `/pr-review` round 6 (0224c3da): security clean. General (medium): the open-attempt index refuses the reopen
   by throwing, which skipped the late-capture alert in the one case it is for (the parent bought again). The reopen now has
   its own catch (`[PACK_PURCHASE_ATTEMPT_REOPEN_REFUSED]`) and the alert follows any NO_CHARGE read.
+- 2026-11-08: `/pr-review` round 7 (9581a314): security clean; one general low (a reopened attempt, already past the absence
+  age, can be judged uncharged again by an immediate retry while Stripe is still processing; the reopen's alert already
+  flags it), added to RS06k. Status -> review; PR opened.
