@@ -78,4 +78,14 @@ public interface SessionPackPurchaseAttemptRepository extends JpaRepository<Sess
     @Query(value = "UPDATE payment.session_pack_purchase_attempts SET previous_card = NULL, attempted_card = NULL "
         + "WHERE parent_id = :parentId", nativeQuery = true)
     int nullCardsForParent(@Param("parentId") Long parentId);
+
+    /**
+     * skillars-deferred-178 (RS06f): true when the attempt has left IN_PROGRESS, read just before the request thread charges.
+     * The resolver writes NO_CHARGE for a stalled request past the absence age, which frees the parent's open-attempt slot;
+     * a thread that resumes after that must not charge.
+     */
+    boolean existsByIdAndStatusNot(Long id, SessionPackPurchaseAttempt.Status status);
+
+    /** skillars-deferred-178 (review round 2): the late-capture alert fires only for an attempt the resolver judged uncharged. */
+    boolean existsByIdAndStatus(Long id, SessionPackPurchaseAttempt.Status status);
 }

@@ -1627,3 +1627,7 @@ an operator must now do.
   its first runs after the deploy re-enqueue the Stripe erasure of every account erased before it, 100 per hour, which
   Stripe answers as a no-op for customers already deleted. A pack purchase or SetupIntent for a payer erased during the
   request is refused (422 `payment.accountErased`). No new webhook, config key or env var.
+- 2026-11-08: skillars-deferred-178 (no migration). The MoneyIntegrityEvent alert also matches `[PACK_PURCHASE_LATE_CAPTURE]`
+  (recreate Grafana after pulling), and the Payments & Payouts "Mismatches and failures" panel shows it and
+  `[PACK_PURCHASE_ATTEMPT_CLOSED_BEFORE_CHARGE]`. The pack-attempt resolver now uses Stripe's PaymentIntent Search API as a
+  fallback (no setup needed; Search is unavailable in India). No new job, webhook, config key or env var.

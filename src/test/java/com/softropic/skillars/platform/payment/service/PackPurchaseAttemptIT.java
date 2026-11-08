@@ -101,6 +101,26 @@ class PackPurchaseAttemptIT extends BasePaymentIT {
         assertThat(attempts.findById(id).orElseThrow().getStatus()).isEqualTo(Status.SUCCEEDED);
     }
 
+    /**
+     * skillars-deferred-178 (review round 3): an unknown charge outcome reopens a NO_CHARGE attempt as UNKNOWN, and the
+     * open-attempt index refuses that once the parent has started another purchase (the alert path then takes over).
+     */
+    @Test
+    void reopeningANoChargeAttempt_isAllowed_untilTheParentHasAnotherOpenAttempt() {
+        Long first = attempts.saveAndFlush(newAttempt(PARENT, "key-aaaaaaaa")).getId();
+        attempts.transition(first, Status.NO_CHARGE, null, EnumSet.of(Status.IN_PROGRESS));
+        assertThat(attempts.existsByIdAndStatus(first, Status.NO_CHARGE)).isTrue();
+        assertThat(attempts.existsByIdAndStatusNot(first, Status.IN_PROGRESS)).isTrue();
+
+        assertThat(attempts.transition(first, Status.UNKNOWN, null, EnumSet.of(Status.NO_CHARGE))).isTrue();
+        attempts.transition(first, Status.NO_CHARGE, null, EnumSet.of(Status.UNKNOWN));
+
+        attempts.saveAndFlush(newAttempt(PARENT, "key-bbbbbbbb")); // the parent bought again
+        assertThatThrownBy(() -> attempts.transition(first, Status.UNKNOWN, null, EnumSet.of(Status.NO_CHARGE)))
+            .isInstanceOf(DataIntegrityViolationException.class);
+        assertThat(attempts.existsByIdAndStatus(first, Status.NO_CHARGE)).isTrue();
+    }
+
     @Test
     void purge_removesOldTerminalAttempts_andNeverAnOpenOne() {
         Long terminal = attempts.saveAndFlush(newAttempt(PARENT, "key-aaaaaaaa")).getId();
