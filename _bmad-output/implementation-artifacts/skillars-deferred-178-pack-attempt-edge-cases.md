@@ -128,3 +128,6 @@ Claude Opus 5.5 (claude-opus-5-5)
 - 2026-11-08: `/pr-review` round 5 (7ec19c15): security clean. General (two low): a failed pre-charge re-check now lets the
   purchase go on as before the check existed, instead of stranding the attempt IN_PROGRESS (`[PACK_PURCHASE_ATTEMPT_RECHECK_FAILED]`);
   a DB failure after an unknown outcome no longer raises the late-capture alert, which now needs a positive NO_CHARGE read.
+- 2026-11-08: `/pr-review` round 6 (0224c3da): security clean. General (medium): the open-attempt index refuses the reopen
+  by throwing, which skipped the late-capture alert in the one case it is for (the parent bought again). The reopen now has
+  its own catch (`[PACK_PURCHASE_ATTEMPT_REOPEN_REFUSED]`) and the alert follows any NO_CHARGE read.

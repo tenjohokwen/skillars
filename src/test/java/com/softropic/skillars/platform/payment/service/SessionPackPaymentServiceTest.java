@@ -1081,6 +1081,34 @@ class SessionPackPaymentServiceTest {
             .anyMatch(e -> e.getFormattedMessage().startsWith("[PACK_PURCHASE_LATE_CAPTURE]"));
     }
 
+    /** Review round 6: the index refusing the reopen (the parent bought again) throws, and is still alerted. */
+    @Test
+    void purchasePack_outcomeUnknown_reopenRefusedByTheIndex_isStillAlerted() {
+        stubPurchaseWithExistingCustomer(makeActiveTier(), "pm_old");
+        when(paymentGateway.chargeAndCapture(any(), any(), any(), any(), anyString(), any()))
+            .thenThrow(new com.softropic.skillars.platform.payment.contract.exception.ChargeOutcomeUnknownException("pack-key", null));
+        var UNKNOWN = com.softropic.skillars.platform.payment.repo.SessionPackPurchaseAttempt.Status.UNKNOWN;
+        var NO_CHARGE = com.softropic.skillars.platform.payment.repo.SessionPackPurchaseAttempt.Status.NO_CHARGE;
+        var IN_PROGRESS = com.softropic.skillars.platform.payment.repo.SessionPackPurchaseAttempt.Status.IN_PROGRESS;
+        when(attemptRepository.transition(any(), eq(UNKNOWN), any(), eq(java.util.Set.of(IN_PROGRESS)))).thenReturn(false);
+        when(attemptRepository.transition(any(), eq(UNKNOWN), any(), eq(java.util.Set.of(NO_CHARGE))))
+            .thenThrow(new org.springframework.dao.DataIntegrityViolationException("uq_sppa_open_per_parent"));
+        when(attemptRepository.existsByIdAndStatus(1L, NO_CHARGE)).thenReturn(true);
+
+        ch.qos.logback.classic.Logger logger = (ch.qos.logback.classic.Logger) org.slf4j.LoggerFactory.getLogger(SessionPackPaymentService.class);
+        ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent> logs = new ch.qos.logback.core.read.ListAppender<>();
+        logs.start();
+        logger.addAppender(logs);
+        try {
+            assertThatThrownBy(() -> sessionPackPaymentService.purchasePack(PARENT_ID, TIER_ID, PLAYER_ID, null, KEY))
+                .isInstanceOf(com.softropic.skillars.platform.payment.contract.exception.ChargeOutcomeUnknownException.class);
+        } finally {
+            logger.detachAppender(logs);
+        }
+        org.assertj.core.api.Assertions.assertThat(logs.list)
+            .anyMatch(e -> e.getFormattedMessage().startsWith("[PACK_PURCHASE_LATE_CAPTURE]"));
+    }
+
     /** Review round 5: a failed re-check never strands the attempt; the purchase goes on as before the check existed. */
     @Test
     void purchasePack_theReCheckFailing_goesOnWithTheCharge() {
