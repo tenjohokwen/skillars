@@ -1,6 +1,7 @@
 package com.softropic.skillars.platform.admin.service;
 
 import com.softropic.skillars.infrastructure.exception.ResourceNotFoundException;
+import com.softropic.skillars.infrastructure.persistence.PessimisticLockRetryer;
 import com.softropic.skillars.infrastructure.security.SecurityError;
 import com.softropic.skillars.platform.admin.contract.AdminGdprRequestDto;
 import com.softropic.skillars.platform.admin.contract.GdprErasureRequestedEvent;
@@ -58,6 +59,7 @@ public class GdprRequestService {
     private final PlayerProfileRepository playerProfileRepository;
     private final ApplicationEventPublisher eventPublisher;
     private final DevelopmentDataErasureGuard developmentDataErasureGuard;
+    private final PessimisticLockRetryer lockRetryer;
 
     @Transactional
     public UUID requestExport(Long userId) {
@@ -111,15 +113,41 @@ public class GdprRequestService {
         // delete the account (an accepted booking moves straight on to PAYMENT_PENDING, then
         // CONFIRMED), leaving the families with sessions nobody would deliver.
         coachProfileRepository.findByUserId(userId).ifPresent(cp -> {
+            // Under the coach row lock every booking-creation path takes: a booking created concurrently
+            // either commits first and is seen here, or waits and then sees this request in flight
+            // (BookingService.requireCoachNotBeingErased).
+            lockRetryer.withBoundedRetry("GdprRequestService.requestErasure", () ->
+                coachProfileRepository.findByIdForUpdate(cp.getId())
+                    .orElseThrow(() -> new ResourceNotFoundException("Coach profile not found", "coach_profile")));
             if (bookingRepository.existsByCoachIdAndStatusIn(cp.getId(), ERASURE_BLOCKING_BOOKING_STATUSES)) {
                 throw new ResponseStatusException(HttpStatus.CONFLICT, "gdpr.activeBookingsExist");
             }
         });
 
+        // Owner decision 2026-11-08 (PRV-03 follow-up): a parent's erasure takes every child's data with it, and
+        // an adult player's takes their own, so either is refused while one of those players has a live booking,
+        // as a child's own erasure is. Each player row is locked first (id order, after the coach row: the order
+        // booking creation takes them), so a booking created concurrently is either seen here or sees this
+        // request in flight (BookingService.requirePlayerBookableUnderLock).
+        List<Long> familyPlayerIds = familyPlayerIds(userId);
+        familyPlayerIds.forEach(id -> developmentDataErasureGuard.isErasedUnderLock(id, "GdprRequestService.requestErasure"));
+        if (!familyPlayerIds.isEmpty()
+                && bookingRepository.existsByPlayerIdInAndStatusIn(familyPlayerIds, ERASURE_BLOCKING_BOOKING_STATUSES)) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "gdpr.activeBookingsExist");
+        }
+
         GdprRequest request = insertOrConflict(new GdprRequest(userId, "ERASURE", "PENDING"));
         eventPublisher.publishEvent(new GdprErasureRequestedEvent(this, request.getId(), userId));
         log.info("[GDPR_ERASURE_REQUESTED] requestId={} userId={}", request.getId(), userId);
         return request.getId();
+    }
+
+    /** The player profiles an account's erasure reaches: its own (a self-registered player) and its children, by id. */
+    private List<Long> familyPlayerIds(Long userId) {
+        java.util.TreeSet<Long> ids = new java.util.TreeSet<>();
+        playerProfileRepository.findByUserId(userId).ifPresent(p -> ids.add(p.getId()));
+        playerProfileRepository.findByParentIdOrderByIdAsc(userId).forEach(p -> ids.add(p.getId()));
+        return List.copyOf(ids);
     }
 
     /**

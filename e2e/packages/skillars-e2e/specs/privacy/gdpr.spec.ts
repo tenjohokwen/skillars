@@ -73,8 +73,8 @@ test.describe('Q · Export and erasure', () => {
       await expect(own.exportButton()).toBeEnabled()
 
       // A real request: built, then downloadable as a ZIP.
+      // (Its "requested" toast is transient and can come and go while the build runs; the button is the outcome.)
       await own.exportButton().click()
-      await expect(profile.notification(t('privacy.exportRequested'))).toBeVisible()
       await expect(own.download()).toBeVisible({ timeout: 60_000 })
       expect(await zipBehind(self.page, await own.download().getAttribute('href'))).toBe('PK')
 
@@ -121,16 +121,17 @@ test.describe('Q · Export and erasure', () => {
   )
 
   test(
-    'a coach with a confirmed session cannot delete their account, and is told why',
+    'a coach, or the parent, with a confirmed session between them cannot delete their account, and is told why',
     scenario({
       id: 'PRV-03',
       priority: 'P1',
       type: 'neg',
-      tags: ['@regression', '@coach', '@privacy'],
+      tags: ['@regression', '@coach', '@parent', '@privacy'],
     }),
     async ({ actor, suite, provision }) => {
       test.slow() // provisions a published coach and a paid booking before the browser part
-      // Owner decision 2026-11-08: any live booking blocks it, not only an unanswered request.
+      // Owner decisions 2026-11-08: any live booking blocks a coach's erasure, not only an unanswered
+      // request; and a family account's, since it would take the child's data with it.
       const coach = await provision.coach()
       const parent = await provision.parent()
       await provision.saveCard(parent)
@@ -150,6 +151,17 @@ test.describe('Q · Export and erasure', () => {
       // Still signed in, with an account: the profile reloads.
       await self.page.reload()
       await profile.waitReady()
+
+      // The family on the other side of the same booking is refused the same way.
+      const family = await actor(asRole(parent))
+      const parentProfile = await new PrivacyScreen(family.page, suite).open()
+      const parentOwn = parentProfile.own()
+      await parentOwn.openErasure().click()
+      await parentOwn.confirmInput().fill(t('privacy.confirmWord'))
+      await parentOwn.submitErasure().click()
+      await expect(parentOwn.erasureError()).toHaveText(t('privacy.errors.activeBookings'), {
+        timeout: 30_000,
+      })
     },
   )
 

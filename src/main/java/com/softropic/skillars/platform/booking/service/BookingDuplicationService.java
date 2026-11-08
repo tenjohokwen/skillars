@@ -82,6 +82,7 @@ public class BookingDuplicationService {
             throw new OperationNotAllowedException("Coach is suspended",
                 Map.of("submitted coach id", coach.getId()), BookingError.COACH_UNAVAILABLE);
         }
+        bookingService.requireCoachNotBeingErased(coach.getId(), Map.of("submitted coach id", coach.getId()));
         // B2: this also creates a booking for the player, so it gets the same erasure guard as
         // BookingService.createBookingRequest — coach row lock first, then the player row lock.
         bookingService.requirePlayerBookableUnderLock(original.getPlayerId(),

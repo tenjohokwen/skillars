@@ -418,13 +418,16 @@ class AvailabilityResourceIT extends AbstractIntegrationTest {
             "SELECT COUNT(*) FROM marketplace.coach_availability_windows WHERE id = ?", Integer.class, windowId))
             .isEqualTo(1);
 
-        ResponseEntity<Map> partial = httpTestClient.makeHttpRequest(
-            impactUrl + "?dayOfWeek=2", HttpMethod.GET, null, authenticatedHeaders(coach), Map.class);
-        assertThat(partial.getStatusCode().is4xxClientError()).isTrue();
+        // HttpTestClient throws on a 4xx.
+        assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
+            impactUrl + "?dayOfWeek=2", HttpMethod.GET, null, authenticatedHeaders(coach), Map.class))
+            .isInstanceOf(HttpClientErrorException.class);
 
-        ResponseEntity<Map> asParent = httpTestClient.makeHttpRequest(
-            impactUrl, HttpMethod.GET, null, authenticatedHeaders(loginAndGetCookies(PARENT_EMAIL)), Map.class);
-        assertThat(asParent.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
+        String parent = loginAndGetCookies(PARENT_EMAIL);
+        assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
+            impactUrl, HttpMethod.GET, null, authenticatedHeaders(parent), Map.class))
+            .isInstanceOf(HttpClientErrorException.class)
+            .satisfies(e -> assertThat(((HttpClientErrorException) e).getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN));
     }
 
     private int impact(String url, String cookies) {

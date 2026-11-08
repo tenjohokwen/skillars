@@ -316,6 +316,39 @@ public interface BookingRepository extends JpaRepository<Booking, UUID> {
         """, nativeQuery = true)
     boolean existsInFlightChildErasureRequest(@Param("playerId") Long playerId);
 
+    // PRV-03 race: the booking-side half of the coach-erasure check. A coach whose own account ERASURE
+    // request is in flight must not be booked: GdprRequestService.requestErasure refuses while any live
+    // booking exists, under the coach_profiles row lock every creation path also takes, so either the
+    // erasure sees the booking or the booking sees this request. Same statuses as the child query.
+    @Query(value = """
+        SELECT EXISTS (
+            SELECT 1 FROM admin.gdpr_requests g
+            JOIN marketplace.coach_profiles cp ON cp.user_id = g.user_id
+            WHERE cp.id = :coachId
+              AND g.player_id IS NULL
+              AND g.request_type = 'ERASURE'
+              AND g.status IN ('PENDING', 'PROCESSING', 'FAILED'))
+        """, nativeQuery = true)
+    boolean existsInFlightCoachErasureRequest(@Param("coachId") UUID coachId);
+
+    // Owner decision 2026-11-08 (PRV-03 follow-up): a family account's erasure is refused while any of its
+    // players has a live booking. The booking-side half: a player whose parent's (or own) account ERASURE
+    // request is in flight is not booked. Read under the player_profiles row lock, which
+    // GdprRequestService.requestErasure takes for every player of the account before its check.
+    @Query(value = """
+        SELECT EXISTS (
+            SELECT 1 FROM admin.gdpr_requests g
+            JOIN main.player_profiles pp ON g.user_id IN (pp.parent_id, pp.user_id)
+            WHERE pp.id = :playerId
+              AND g.player_id IS NULL
+              AND g.request_type = 'ERASURE'
+              AND g.status IN ('PENDING', 'PROCESSING', 'FAILED'))
+        """, nativeQuery = true)
+    boolean existsInFlightFamilyErasureRequest(@Param("playerId") Long playerId);
+
+    /** Any live booking for one of these players (an account's own profile and its children). */
+    boolean existsByPlayerIdInAndStatusIn(Collection<Long> playerIds, List<String> statuses);
+
     // skillars-12-10 AC2: the READ-clock for the coach-access window — the latest booking END for the pair
     // over the given statuses (null = no relationship). A future end is returned as-is, which is what keeps
     // an in-progress session and the wrap-up-to-completion gap inside the window.

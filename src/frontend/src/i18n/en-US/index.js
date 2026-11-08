@@ -2913,7 +2913,7 @@ export default {
       alreadyPending: 'A request of this type is already being processed.',
       exportInProgress: 'An export is still being prepared. Wait for it to finish before deleting.',
       activeBookings:
-        'You still have booking requests or sessions that are not finished. Decline, cancel or complete them before deleting your account.',
+        'You still have bookings that are not settled: requests, upcoming sessions, or sessions waiting for confirmation, a dispute or a refund. You can delete your account once they are settled.',
       activeBookingsChild: 'This child still has an active booking. Cancel or complete it first.',
       playerAlreadyErased: "This child's data has already been deleted.",
       notAllowed: 'You are not allowed to do this.',
