@@ -79,6 +79,9 @@ Claude Opus 5.5 (claude-opus-5-5)
 - `src/main/java/com/softropic/skillars/platform/security/infrastructure/jwt/filter/JWTAuthorizationFilter.java`
 - `src/main/java/com/softropic/skillars/platform/security/api/AuthResource.java`
 - `src/main/java/com/softropic/skillars/platform/payment/api/SessionPackPaymentResource.java`
+- `src/main/java/com/softropic/skillars/infrastructure/security/RequestRateLimitedException.java` (new), `RateLimitingAspect.java`
+- `src/main/java/com/softropic/skillars/platform/security/api/ApiAdvice.java`, `src/main/resources/i18n/messages*.properties`
+- `src/test/java/com/softropic/skillars/platform/security/api/ApiAdviceTest.java`
 - javadoc only: `ClaimsExtractorImpl.java`, `RefreshToken.java`, `RefreshTokenRepository.java`, `LoginTokenManager.java`,
   `RefreshTokenRevocationService.java`
 - `src/test/java/com/softropic/skillars/platform/security/infrastructure/jwt/filter/JWTAuthorizationFilterTest.java`
@@ -91,6 +94,10 @@ Claude Opus 5.5 (claude-opus-5-5)
 
 ### Change Log
 
+- 2026-11-08: /pr-review round 2 (general, low, confirmed pre-existing and app-wide): every `@RateLimited` refusal answered
+  401 `security.unauthorized` (the generic AuthorizationException handler), which the SPA reads as an ended session.
+  New `RequestRateLimitedException` (an AuthorizationException subclass) with its own 429 `security.tooManyRequests`
+  handler and no audit-row event; `ApiAdviceTest` pins the dispatch.
 - 2026-11-08: /pr-review round 1 (both arms, medium): the logout rate limit let anyone on a shared IP block others'
   logouts; removed, refresh keeps it.
 - 2026-11-08: created from the owner's decisions; D23/D24; implemented T1-T4. The unannotated Spring `POST /api/logout`

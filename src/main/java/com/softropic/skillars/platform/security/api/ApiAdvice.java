@@ -415,6 +415,18 @@ public class ApiAdvice {
         return handleSecErrorAndReturnDTO(ex, ex.getMessage(), "security.accountNotVerified");
     }
 
+    /**
+     * skillars-deferred-180 (review round 2): an empty {@code @RateLimited} bucket. More specific than the
+     * {@code AuthorizationException} handler, which answered 401 for it, so the SPA read a throttle as an ended session.
+     * No {@code SecurityAlertEvent}: that writes an audit row per refusal, which a flood would multiply, and
+     * {@code RateLimitingAspect} already logs each one.
+     */
+    @ExceptionHandler(com.softropic.skillars.infrastructure.security.RequestRateLimitedException.class)
+    @ResponseStatus(HttpStatus.TOO_MANY_REQUESTS)
+    public ErrorDto requestRateLimitedHandler(final com.softropic.skillars.infrastructure.security.RequestRateLimitedException ex) {
+        return logErrorAndReturnDTO(ex, "Too many requests. Please try again later.", "security.tooManyRequests");
+    }
+
     @ExceptionHandler(LoginRateLimitedException.class)
     public ResponseEntity<ErrorDto> loginRateLimitedHandler(final LoginRateLimitedException ex) {
         ErrorDto body = handleSecErrorAndReturnDTO(ex, ex.getMessage(), "security.accountLocked");
