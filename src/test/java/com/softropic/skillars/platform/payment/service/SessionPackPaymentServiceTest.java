@@ -78,6 +78,9 @@ class SessionPackPaymentServiceTest {
         // skillars-deferred-174: a named card is the payer's own unless a test says otherwise, and the success-path card
         // re-apply finds the column as the purchase left it.
         lenient().when(paymentGateway.paymentMethodBelongsTo(any(), any())).thenReturn(true);
+        // skillars-deferred-177 (RS03h): the payer is live unless a test erases them.
+        lenient().when(stripeCustomerCardWrites.payerLive(any())).thenReturn(true);
+        lenient().when(stripeCustomerCardWrites.writeCardIfPayerLive(any(), any())).thenReturn(true);
         lenient().when(subscriptionService.reapplyPaymentMethodAndScheduleSync(any(), any(), any())).thenReturn(true);
         lenient().when(lockRetryer.withBoundedRetry(anyString(), any()))
             .thenAnswer(inv -> ((java.util.function.Supplier<?>) inv.getArgument(1)).get());
@@ -769,6 +772,48 @@ class SessionPackPaymentServiceTest {
         order.verify(attemptRepository).transition(any(), eq(
             com.softropic.skillars.platform.payment.repo.SessionPackPurchaseAttempt.Status.NO_CHARGE), any(), any());
         verify(subscriptionService, never()).reapplyPaymentMethodAndScheduleSync(any(), any(), any());
+    }
+
+    // ── skillars-deferred-177 (RS03h): a payer erased while the purchase runs is refused before the charge ─────────
+
+    private void assertRefusedAsErased(String paymentMethodId) {
+        assertThatThrownBy(() -> sessionPackPaymentService.purchasePack(PARENT_ID, TIER_ID, PLAYER_ID, paymentMethodId, KEY))
+            .isInstanceOf(com.softropic.skillars.platform.payment.contract.exception.PackNoChargeException.class);
+        verify(paymentGateway, never()).chargeAndCapture(any(), any(), any(), any(), anyString(), any());
+        verify(attemptRepository).transition(any(), eq(
+            com.softropic.skillars.platform.payment.repo.SessionPackPurchaseAttempt.Status.NO_CHARGE), any(), any());
+    }
+
+    @Test
+    void purchasePack_existingCustomerErasedMeanwhile_namedCard_isRefusedBeforeTheCharge() {
+        stubPurchaseWithExistingCustomer(makeActiveTier(), "pm_old");
+        when(stripeCustomerCardWrites.writeCardIfPayerLive(PARENT_ID, "pm_new")).thenReturn(false);
+
+        assertRefusedAsErased("pm_new");
+    }
+
+    @Test
+    void purchasePack_existingCustomerErasedMeanwhile_savedCard_isRefusedBeforeTheCharge() {
+        stubPurchaseWithExistingCustomer(makeActiveTier(), "pm_old");
+        when(stripeCustomerCardWrites.payerLive(PARENT_ID)).thenReturn(false);
+
+        assertRefusedAsErased(null);
+    }
+
+    @Test
+    void purchasePack_firstCustomerCreatedWhileErased_isRefusedBeforeTheCharge() {
+        PlayerProfile player = new PlayerProfile();
+        player.setId(PLAYER_ID);
+        player.setUserId(PARENT_ID);
+        when(playerProfileRepository.findById(PLAYER_ID)).thenReturn(Optional.of(player));
+        when(sessionPackTierRepository.findById(TIER_ID)).thenReturn(Optional.of(makeActiveTier()));
+        when(stripeCustomerRepository.findById(PARENT_ID)).thenReturn(Optional.empty());
+        when(stripeCustomerRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(paymentGateway.createStripeCustomer(PARENT_ID)).thenReturn("cus_test");
+        when(stripeCustomerEmailSync.currentEmail(PARENT_ID)).thenReturn("before@example.com");
+        when(stripeCustomerEmailSync.syncIfEmailChangedSince(PARENT_ID, "before@example.com")).thenReturn(true);
+
+        assertRefusedAsErased(null);
     }
 
     @Test

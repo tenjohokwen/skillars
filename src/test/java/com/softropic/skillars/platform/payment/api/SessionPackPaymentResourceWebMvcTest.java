@@ -245,6 +245,41 @@ class SessionPackPaymentResourceWebMvcTest {
             .andExpect(jsonPath("$.clientSecret").value("seti_coach_secret"));
     }
 
+    // skillars-deferred-177 (RS03h): no SetupIntent for a payer erased while the request ran.
+    @Test
+    @WithMockUser(roles = "PARENT")
+    void setupIntent_existingCustomerErasedMeanwhile_422_noSetupIntent() throws Exception {
+        when(securityUtil.getCurrentCoachUserId()).thenReturn(PARENT_USER_ID);
+        StripeCustomer customer = new StripeCustomer();
+        customer.setParentId(PARENT_USER_ID);
+        customer.setStripeCustomerId("cus_erased");
+        when(stripeCustomerRepository.findById(PARENT_USER_ID)).thenReturn(Optional.of(customer));
+        org.mockito.Mockito.doThrow(new com.softropic.skillars.platform.payment.contract.exception.PaymentGatewayException(
+            "payment.accountErased")).when(sessionPackPaymentService).requirePayerLive(PARENT_USER_ID);
+
+        mockMvc.perform(post("/api/payment/setup-intent").contentType(MediaType.APPLICATION_JSON))
+            .andExpect(status().isUnprocessableEntity())
+            .andExpect(jsonPath("$.errorMsg.errorKey").value("payment.accountErased"));
+
+        org.mockito.Mockito.verify(paymentGateway, org.mockito.Mockito.never()).createSetupIntent(org.mockito.ArgumentMatchers.any());
+    }
+
+    @Test
+    @WithMockUser(roles = "PARENT")
+    void setupIntent_firstCustomerCreatedWhileErased_422_noSetupIntent() throws Exception {
+        when(securityUtil.getCurrentCoachUserId()).thenReturn(PARENT_USER_ID);
+        when(stripeCustomerRepository.findById(PARENT_USER_ID)).thenReturn(Optional.empty());
+        when(stripeCustomerEmailSync.currentEmail(PARENT_USER_ID)).thenReturn("before@example.com");
+        when(paymentGateway.createStripeCustomer(PARENT_USER_ID)).thenReturn("cus_new");
+        when(stripeCustomerRepository.save(org.mockito.ArgumentMatchers.any())).thenAnswer(inv -> inv.getArgument(0));
+        when(stripeCustomerEmailSync.syncIfEmailChangedSince(PARENT_USER_ID, "before@example.com")).thenReturn(true);
+
+        mockMvc.perform(post("/api/payment/setup-intent").contentType(MediaType.APPLICATION_JSON))
+            .andExpect(status().isUnprocessableEntity());
+
+        org.mockito.Mockito.verify(paymentGateway, org.mockito.Mockito.never()).createSetupIntent(org.mockito.ArgumentMatchers.any());
+    }
+
     // skillars-deferred-176 AC2 (RS03e): the email is read before the customer is created and compared after its row is saved.
     @Test
     @WithMockUser(roles = "PARENT")

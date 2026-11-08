@@ -72,24 +72,30 @@ public class StripeCustomerEmailSyncOutboxSupport {
      * before this read is waited for, so its tombstone is seen; one that writes it after this read waits for this
      * transaction, so its own Stripe-customer lookup, which follows the tombstone, finds the row. Either way the Stripe
      * customer is erased.
+     *
+     * <p>skillars-deferred-177 (RS03h): returns true when the account was found erased, so the caller stops (no charge, no
+     * SetupIntent) instead of going on with a customer that is about to be deleted. False when the read failed: the sweep
+     * then schedules the Stripe erasure, and the caller goes on (the narrow residual the ledger records).
      */
-    public void syncIfEmailChangedSince(Long userId, String emailBefore) {
+    public boolean syncIfEmailChangedSince(Long userId, String emailBefore) {
         try {
-            transactionTemplate.executeWithoutResult(status -> {
+            return Boolean.TRUE.equals(transactionTemplate.execute(status -> {
                 String emailNow = userRepository.findEmailByIdForShare(userId).orElse(null);
                 if (StripeCustomerCardWrites.isErasureTombstone(userId, emailNow)) {
                     erasureOutboxSupport.scheduleErasure(userId);
                     log.warn("[STRIPE_CUSTOMER_ERASURE_SCHEDULED_LATE userId={}] erased while its Stripe customer was created", userId);
-                    return;
+                    return true;
                 }
-                if (Objects.equals(emailNow, emailBefore)) {
-                    return;
+                if (!Objects.equals(emailNow, emailBefore)) {
+                    enqueue(userId);
+                    log.info("[STRIPE_CUSTOMER_EMAIL_SYNC_SCHEDULED userId={}] email changed while the customer was created", userId);
                 }
-                enqueue(userId);
-                log.info("[STRIPE_CUSTOMER_EMAIL_SYNC_SCHEDULED userId={}] email changed while the customer was created", userId);
-            });
+                return false;
+            }));
         } catch (RuntimeException e) {
+            // skillars-deferred-177 (RS03i): if this was the late erasure, StripeCustomerErasureSweep schedules it.
             log.error("[STRIPE_CUSTOMER_EMAIL_SYNC_ENQUEUE_FAILED] userId={} after customer creation", userId, e);
+            return false;
         }
     }
 

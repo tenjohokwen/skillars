@@ -176,7 +176,12 @@ public class SessionPackPaymentResource {
     @PreAuthorize(SecurityConstants.HAS_PARENT_PLAYER_OR_COACH_ROLE)
     public ResponseEntity<SetupIntentResponse> createSetupIntent() {
         Long parentId = securityUtil.getCurrentCoachUserId();
+        // skillars-deferred-177 (RS03h): no SetupIntent for a payer erased while the request ran.
         StripeCustomer customer = stripeCustomerRepository.findById(parentId)
+            .map(existing -> {
+                sessionPackPaymentService.requirePayerLive(parentId);
+                return existing;
+            })
             .orElseGet(() -> {
                 String emailBefore = stripeCustomerEmailSync.currentEmail(parentId);
                 String stripeCustomerId = paymentGateway.createStripeCustomer(parentId);
@@ -190,7 +195,9 @@ public class SessionPackPaymentResource {
                     return stripeCustomerRepository.findById(parentId).orElseThrow();
                 }
                 // skillars-deferred-176 AC2: an email change that committed while the customer was created enqueued no sync.
-                stripeCustomerEmailSync.syncIfEmailChangedSince(parentId, emailBefore);
+                if (stripeCustomerEmailSync.syncIfEmailChangedSince(parentId, emailBefore)) {
+                    throw SessionPackPaymentService.erasedPayer(parentId);
+                }
                 return saved;
             });
         String clientSecret = paymentGateway.createSetupIntent(customer.getStripeCustomerId());

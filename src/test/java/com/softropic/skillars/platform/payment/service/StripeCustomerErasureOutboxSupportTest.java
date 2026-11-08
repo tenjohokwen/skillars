@@ -44,6 +44,8 @@ class StripeCustomerErasureOutboxSupportTest {
 
         // skillars-deferred-176 round-1 V2: an UPDATE that always locks the row, never a save of the loaded entity
         verify(stripeCustomerRepository).clearPaymentMethod(7L);
+        // skillars-deferred-177 (RS03i): marked in the same transaction, so the sweep skips it
+        verify(stripeCustomerRepository).markErasureScheduled(eq(7L), any());
         verify(stripeCustomerRepository, never()).save(any());
         assertThat(customer.getStripeCustomerId()).isEqualTo("cus_123");
         assertThat(customer.getLastPaymentIntentId()).isEqualTo("pi_1");

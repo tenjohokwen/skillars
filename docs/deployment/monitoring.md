@@ -443,7 +443,7 @@ docker compose pull node_exporter && docker compose up -d --no-deps node_exporte
 
 **Response:** Background Work shows the request type and any failure log. Complete it by hand if the job cannot.
 
-A completed erasure can still leave a Stripe customer behind. A first Stripe customer that is created while an erasure is still in progress gets its Stripe erasure scheduled after it is saved; if that scheduling fails, the app logs only `[STRIPE_CUSTOMER_EMAIL_SYNC_ENQUEUE_FAILED] userId=… after customer creation` at ERROR, and **no alert fires on it** (deferred-work RS03i). When you see that line and the user's email is `deleted.<userId>@erased.io`, delete that user's Stripe customer (`payment.stripe_customers.stripe_customer_id`) in the Stripe dashboard and set its `stripe_payment_method_id` to NULL.
+A completed erasure can still leave a Stripe customer behind for up to an hour. A first Stripe customer that is created while an erasure is still in progress gets its Stripe erasure scheduled after it is saved; if that fails, the app logs `[STRIPE_CUSTOMER_EMAIL_SYNC_ENQUEUE_FAILED] userId=… after customer creation` and the hourly `StripeCustomerErasureSweep` schedules it (`[STRIPE_CUSTOMER_ERASURE_SCHEDULED_BY_SWEEP]`). Act only on `[STRIPE_CUSTOMER_ERASURE_SWEEP_FAILED] userId=…`, which repeats every hour until it succeeds: fix the cause in the logged exception, or delete that user's Stripe customer (`payment.stripe_customers.stripe_customer_id`) in the Stripe dashboard and set the row's `erasure_scheduled_at` to `now()`.
 
 ---
 

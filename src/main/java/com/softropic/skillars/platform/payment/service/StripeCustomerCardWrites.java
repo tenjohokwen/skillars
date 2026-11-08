@@ -53,6 +53,15 @@ public class StripeCustomerCardWrites {
         return email != null && email.equals("deleted." + userId + "@erased.io");
     }
 
+    /**
+     * skillars-deferred-177 (RS03h): {@link #lockIfPayerLive} in its own transaction, for a caller that writes no card but
+     * must not go on for an erased payer (a pack purchase without a named card, a SetupIntent).
+     */
+    @Transactional
+    public boolean payerLive(Long userId) {
+        return lockIfPayerLive(userId);
+    }
+
     /** RS09g: a pack purchase's card on an existing customer row, as a one-column UPDATE rather than a full-row save. */
     @Transactional
     public boolean writeCardIfPayerLive(Long userId, String paymentMethodId) {

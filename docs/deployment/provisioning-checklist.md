@@ -1181,6 +1181,7 @@ Detail: [`scheduler-lock-tuning.md`](scheduler-lock-tuning.md), `docs/dev-docs/s
 | `SubscriptionTierReconciliationScheduler` | daily 04:00 | hard-coded |
 | `StripeSubscriptionReconciliationScheduler` | daily 05:00 | hard-coded |
 | `GdprErasureRetryScheduler` | daily 06:00 | hard-coded |
+| `StripeCustomerErasureSweep` | hourly at :17 | hard-coded; ShedLock `StripeCustomerErasureSweep_scheduleMissedErasures` (`PT15M` / `PT1M`). Enqueues the Stripe-side erasure (`STRIPE_CUSTOMER_ERASURE`) for each payer whose account carries the GDPR tombstone and whose `stripe_customers.erasure_scheduled_at` is NULL, at most 100 per run; WARN `[STRIPE_CUSTOMER_ERASURE_SCHEDULED_BY_SWEEP]`, ERROR `[STRIPE_CUSTOMER_ERASURE_SWEEP_FAILED]`. The first runs after V234 re-enqueue every earlier erasure once (idempotent at Stripe) |
 | `CoachStripeAccountResyncScheduler` | daily 07:00 | hard-coded; re-reads each connected `COMPLETE` Stripe account (`Account.retrieve`, 200 per page, at most 25 pages per run) and applies it like `account.updated` |
 | `StalePayoutAlertScheduler` | daily 06:30 | hard-coded cron; age threshold `payment.payout.stale_alert_days` (14). Alerts only (`PAYOUT_HELD` for FROZEN/HOLD payouts unchanged that long). Pages through every stale row (200 per page, at most 50 pages per run) |
 | `MessageRetentionScheduler` | daily 02:00 | hard-coded; deletes per `platform.message_retention_months` |
@@ -1619,3 +1620,8 @@ an operator must now do.
   logs `[STRIPE_WEBHOOK_PARKED_LINKED_NOT_PURGED]`. `[SUBSCRIPTION_UPGRADE_UNGRANTED]` (MoneyIntegrityEvent) also fires when
   recording an upgrade fails after Stripe upgraded. A confirmed or undone email change now updates the Stripe customer's
   email through the outbox (`STRIPE_CUSTOMER_EMAIL_SYNC`). No new job, webhook, config key or env var.
+- 2026-11-08: skillars-deferred-177 (V234, one additive nullable column `payment.stripe_customers.erasure_scheduled_at`,
+  runs automatically, no pre-check). New hourly job `StripeCustomerErasureSweep` ([section 6](#6-scheduled-jobs-and-shedlock));
+  its first runs after the deploy re-enqueue the Stripe erasure of every account erased before it, 100 per hour, which
+  Stripe answers as a no-op for customers already deleted. A pack purchase or SetupIntent for a payer erased during the
+  request is refused (422 `payment.accountErased`). No new webhook, config key or env var.

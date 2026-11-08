@@ -1047,9 +1047,13 @@ public class SessionPackPaymentService {
 
     private StripeCustomer getOrCreateStripeCustomer(Long parentId, String paymentMethodId) {
         return stripeCustomerRepository.findById(parentId).map(existing -> {
-            if (paymentMethodId != null && !paymentMethodId.isBlank()) {
-                // skillars-deferred-176 AC3 (RS09g): one column, under the row lock, never onto an erased payer's row.
-                stripeCustomerCardWrites.writeCardIfPayerLive(parentId, paymentMethodId);
+            // skillars-deferred-176 AC3 (RS09g): one column, under the row lock, never onto an erased payer's row.
+            // skillars-deferred-177 (RS03h): an erased payer is refused before the charge, card or not.
+            boolean live = paymentMethodId != null && !paymentMethodId.isBlank()
+                ? stripeCustomerCardWrites.writeCardIfPayerLive(parentId, paymentMethodId)
+                : stripeCustomerCardWrites.payerLive(parentId);
+            if (!live) {
+                throw erasedPayer(parentId);
             }
             return existing;
         }).orElseGet(() -> {
@@ -1061,9 +1065,27 @@ public class SessionPackPaymentService {
             sc.setStripePaymentMethodId(paymentMethodId);
             StripeCustomer saved = stripeCustomerRepository.save(sc);
             // skillars-deferred-176 AC2: an email change that committed while the customer was created enqueued no sync.
-            stripeCustomerEmailSync.syncIfEmailChangedSince(parentId, emailBefore);
+            if (stripeCustomerEmailSync.syncIfEmailChangedSince(parentId, emailBefore)) {
+                throw erasedPayer(parentId); // skillars-deferred-177 (RS03h); its Stripe erasure is already scheduled
+            }
             return saved;
         });
+    }
+
+    /** skillars-deferred-177 (RS03h): refuses ({@link #erasedPayer}) a payer whose row is gone or who has been erased. */
+    public void requirePayerLive(Long parentId) {
+        if (!stripeCustomerCardWrites.payerLive(parentId)) {
+            throw erasedPayer(parentId);
+        }
+    }
+
+    /**
+     * skillars-deferred-177 (RS03h): the payer was erased while this request ran. A PaymentGatewayException, so purchasePack
+     * marks the attempt NO_CHARGE (nothing was charged) and answers as for any refusal before the charge.
+     */
+    public static PaymentGatewayException erasedPayer(Long parentId) {
+        log.warn("[PAYMENT_REFUSED_ACCOUNT_ERASED parentId={}] the payer was erased while the request ran", parentId);
+        return new PaymentGatewayException("payment.accountErased");
     }
 
     private SessionPackPurchase createPurchase(Long parentId, Long playerId, SessionPackTier tier, String paymentIntentId) {

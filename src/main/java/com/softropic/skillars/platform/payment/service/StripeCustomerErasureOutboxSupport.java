@@ -47,6 +47,8 @@ public class StripeCustomerErasureOutboxSupport {
         // erased row. The UPDATE always takes the row lock, so StripeCustomerCardWrites either waits and sees the tombstone,
         // or committed first and is nulled here.
         stripeCustomerRepository.clearPaymentMethod(userId);
+        // skillars-deferred-177 (RS03i): commits with the outbox row below, so StripeCustomerErasureSweep skips this payer.
+        stripeCustomerRepository.markErasureScheduled(userId, java.time.Instant.now());
         stripeCustomerRepository.findById(userId).ifPresent(customer -> {
             final String json;
             try {
