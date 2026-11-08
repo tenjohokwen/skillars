@@ -181,6 +181,23 @@ class PackPurchaseAttemptIT extends BasePaymentIT {
         attempts.saveAndFlush(newAttempt(PARENT, "key-bbbbbbbb"));
     }
 
+    // skillars-deferred-176 AC4 (RS06i): an absence verdict never closes an UNRECONCILED row, not even the operator's; only its
+    // stored PaymentIntent can (unit-tested in SessionPackPaymentServiceTest), and this one has none
+    @Test
+    void adminClose_anUnreconciledAttemptWithoutAStoredIntent_isRefusedAsCapturedNoPack_rowUnchanged() {
+        Long id = attempts.saveAndFlush(newAttempt(PARENT, "key-aaaaaaaa")).getId();
+        attempts.transition(id, Status.UNRECONCILED, null, EnumSet.of(Status.IN_PROGRESS));
+        ageAttempts(PARENT, "2 hours");
+
+        assertThatThrownBy(() -> sessionPackPaymentService.closeAttemptByAdmin(id, 42L, "Stripe shows no charge"))
+            .isInstanceOf(org.springframework.web.server.ResponseStatusException.class)
+            .hasMessageContaining("payment.packAttempt.capturedNoPack");
+
+        SessionPackPurchaseAttempt row = attempts.findById(id).orElseThrow();
+        assertThat(row.getStatus()).isEqualTo(Status.UNRECONCILED);
+        assertThat(row.getClosedBy()).isNull();
+    }
+
     @Test
     void adminClose_tooRecentToTrustTheAbsence_isRefused_rowUnchanged() {
         Long id = attempts.saveAndFlush(newAttempt(PARENT, "key-aaaaaaaa")).getId();
@@ -296,6 +313,19 @@ class PackPurchaseAttemptIT extends BasePaymentIT {
         recorder.recordUngrantedUpgrade("COACH", "coach-1", "sub_it169_e", "ACADEMY", "in_1");
 
         assertThat(upgradeRows("sub_it169_e")).isEqualTo(5);
+    }
+
+    // skillars-deferred-176 AC5 (RS07c): a granted retry resolves the open rows of that subscription's target tier only
+    @Test
+    void aGrantedUpgrade_resolvesTheOpenRowsOfItsTargetTier_only() {
+        recorder.recordUngrantedUpgrade("COACH", "coach-1", "sub_it169_r176", "ACADEMY", "in_1");
+        recorder.recordUngrantedUpgrade("COACH", "coach-1", "sub_it169_r176", "INSTRUCTOR", "in_2");
+
+        recorder.resolveUngrantedUpgrades("sub_it169_r176", "ACADEMY");
+
+        assertThat(jdbcTemplate.queryForList(
+            "SELECT target_tier FROM payment.subscription_upgrade_reconciliations WHERE stripe_subscription_id = ? "
+                + "AND resolved_at IS NULL", String.class, "sub_it169_r176")).containsExactly("INSTRUCTOR");
     }
 
     private int upgradeRows(String subId) {

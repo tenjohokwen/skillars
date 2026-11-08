@@ -1,6 +1,6 @@
 # Story skillars-deferred-175: Subscription follow-ups (stale incomplete webhooks, parked-event poison, ungranted upgrades, Stripe email)
 
-Status: review
+Status: done
 
 <!-- CREATED 2026-11-06 by splitting skillars-deferred-174 (owner decision D0 = 1: two stories). This is 174's
      Part B, moved verbatim: RS05c, RS-poison, RS07b, RS03c. Decision ids D5-D8 keep their 174 numbers so the
@@ -343,3 +343,4 @@ Claude Opus 5.5 (claude-opus-5-5), via /bmad-dev-story, 2026-11-07.
 - 2026-11-07: implemented T1-T5 and the ledger/sprint-status part of T6 (dev-story). `/pr-review` and the PR pending.
 - 2026-11-07: `/pr-review` round 1 fixes (V1 amends D8: locked accounts are synced; V2 invoice-keyed dedupe; V4 permanent 4xx); RS03e/RS03f ledgered.
 - 2026-11-07: `/pr-review` round 2 clean (one verify item added to RS03f); status -> review, PR opened.
+- 2026-11-07: PR #489 merged as 0df391d5; status -> done.

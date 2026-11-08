@@ -232,9 +232,9 @@ class CoachProfileServiceTest {
         when(coachProfileRepository.findByUserId(USER_ID)).thenReturn(Optional.of(profile));
         when(coachProfileRepository.findByIdForUpdate(COACH_ID)).thenReturn(Optional.of(profile));
 
-        service.deletePhoto(USER_ID, "coach@example.com");
+        service.deletePhoto(USER_ID);
 
-        verify(fileStorageService).softDelete("coach_profile/" + USER_ID + "/2026/01/photo.jpg", "coach@example.com");
+        verify(fileStorageService).softDelete("coach_profile/" + USER_ID + "/2026/01/photo.jpg");
         verify(coachProfileRepository).save(profile);
         assertThat(profile.getPhotoUrl()).isNull();
     }
@@ -245,9 +245,9 @@ class CoachProfileServiceTest {
         profile.setPhotoUrl(null);
         when(coachProfileRepository.findByUserId(USER_ID)).thenReturn(Optional.of(profile));
 
-        service.deletePhoto(USER_ID, "coach@example.com");
+        service.deletePhoto(USER_ID);
 
-        verify(fileStorageService, never()).softDelete(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any());
+        verify(fileStorageService, never()).softDelete(org.mockito.ArgumentMatchers.any());
         verify(coachProfileRepository, never()).save(org.mockito.ArgumentMatchers.any());
     }
 
@@ -260,9 +260,9 @@ class CoachProfileServiceTest {
         when(coachProfileRepository.findByUserId(USER_ID)).thenReturn(Optional.of(profile));
         when(coachProfileRepository.findByIdForUpdate(COACH_ID)).thenReturn(Optional.of(profile));
         org.mockito.Mockito.doThrow(new StorageObjectNotFoundException("coach_profile/" + USER_ID + "/2026/01/photo.jpg"))
-            .when(fileStorageService).softDelete(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any());
+            .when(fileStorageService).softDelete(org.mockito.ArgumentMatchers.any());
 
-        service.deletePhoto(USER_ID, "coach@example.com");
+        service.deletePhoto(USER_ID);
 
         verify(coachProfileRepository).save(profile);
         assertThat(profile.getPhotoUrl()).isNull();
@@ -439,9 +439,9 @@ class CoachProfileServiceTest {
         when(coachProfileRepository.findByUserId(USER_ID)).thenReturn(Optional.of(profile));
         when(coachProfileRepository.findByIdForUpdate(COACH_ID)).thenReturn(Optional.of(profile));
         org.mockito.Mockito.doThrow(new AuthorizationException("User not authorized to delete this file", SecurityError.MISSING_RIGHTS))
-            .when(fileStorageService).softDelete(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any());
+            .when(fileStorageService).softDelete(org.mockito.ArgumentMatchers.any());
 
-        service.deletePhoto(USER_ID, "coach@example.com");
+        service.deletePhoto(USER_ID);
 
         verify(coachProfileRepository).save(profile);
         assertThat(profile.getPhotoUrl()).isNull();

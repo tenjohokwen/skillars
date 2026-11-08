@@ -115,6 +115,15 @@ public interface UserRepository extends JpaRepository<User, Long> {
            nativeQuery = true)
     Optional<Long> findUserIdByCoachProfileId(@Param("coachProfileId") java.util.UUID coachProfileId);
 
+    /**
+     * skillars-deferred-176 review round 6: the account's email under {@code FOR SHARE}, so a transaction that has written
+     * the row (a GDPR erasure's tombstone, an email change) but not committed is waited for and its value read. Scalar and
+     * native so an already-managed {@link User} cannot hand back its pre-wait email. Must run inside the caller's
+     * transaction; the share lock is held until it ends.
+     */
+    @Query(value = "select u.email from main.\"user\" u where u.id = :id for share", nativeQuery = true)
+    Optional<String> findEmailByIdForShare(@Param("id") Long id);
+
     @Override
     void delete(final User user);
 

@@ -90,6 +90,31 @@ public class PaymentRecoveryRecorder {
             kind, subscriberRef, stripeSubscriptionId, targetTier, latestInvoiceId));
     }
 
+    /**
+     * skillars-deferred-176 AC5 (RS07c): a tier upgrade that was persisted resolves any open row recorded for the same
+     * subscription and target tier (an earlier attempt that Stripe billed and the persist lost), so the operator does not
+     * refund a grant that a retry completed. Never throws.
+     */
+    public void resolveUngrantedUpgrades(String stripeSubscriptionId, String targetTier) {
+        RoutingDataSourceContext.set(DataSourceConfig.PAYMENT_REQUIRES_NEW_DATASOURCE_KEY);
+        try {
+            int resolved = self.resolveUngrantedUpgradesTx(stripeSubscriptionId, targetTier);
+            if (resolved > 0) {
+                log.info("[SUBSCRIPTION_UPGRADE_RECONCILED] a retry granted the tier: stripeSubId={} targetTier={} rows={}",
+                    stripeSubscriptionId, targetTier, resolved);
+            }
+        } catch (RuntimeException ex) {
+            log.error("[SUBSCRIPTION_UPGRADE_RESOLVE_FAILED] stripeSubId={} targetTier={}", stripeSubscriptionId, targetTier, ex);
+        } finally {
+            RoutingDataSourceContext.clear();
+        }
+    }
+
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public int resolveUngrantedUpgradesTx(String stripeSubscriptionId, String targetTier) {
+        return upgradeReconciliationRepository.resolveOpen(stripeSubscriptionId, targetTier, java.time.Instant.now());
+    }
+
     /** The extracted fields of a parked {@code customer.subscription.updated|deleted} event. */
     public record ParkedSubscriptionEvent(String eventId, String stripeSubscriptionId, String eventType, Long eventCreated,
                                           String status, Long currentPeriodEnd, Boolean cancelAtPeriodEnd,

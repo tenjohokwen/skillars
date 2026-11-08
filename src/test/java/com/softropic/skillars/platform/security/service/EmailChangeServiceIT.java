@@ -456,6 +456,46 @@ class EmailChangeServiceIT extends AbstractIntegrationTest {
         });
     }
 
+    @Autowired private com.softropic.skillars.platform.payment.service.StripeCustomerEmailSyncOutboxHandler emailSyncHandler;
+
+    // skillars-deferred-176 AC1 (RS03f): while the erasure side holds the customer's outbox lock, a sync waits, and then
+    // reads the tombstone committed under that lock instead of the address it would have read before.
+    @Test
+    void anEmailSync_waitsForTheCustomerOutboxLock_thenSeesTheErasureCommittedUnderIt() {
+        withStripeCustomer(() -> {
+            CountDownLatch locked = new CountDownLatch(1);
+            CountDownLatch release = new CountDownLatch(1);
+            ExecutorService pool = Executors.newFixedThreadPool(2);
+            try {
+                Future<?> holder = pool.submit(() -> transactionTemplate.executeWithoutResult(status -> {
+                    jdbcTemplate.queryForList("SELECT pg_advisory_xact_lock(?, hashtext(?))",
+                        com.softropic.skillars.platform.payment.repo.StripeCustomerRepository.CUSTOMER_OUTBOX_LOCK_NAMESPACE,
+                        CUSTOMER);
+                    jdbcTemplate.update("UPDATE main.\"user\" SET email = ? WHERE id = ?", "deleted." + ME_ID + "@erased.io", ME_ID);
+                    locked.countDown();
+                    await(release);
+                }));
+                await(locked);
+                Future<?> sync = pool.submit(() -> transactionTemplate.executeWithoutResult(
+                    status -> emailSyncHandler.handle("{\"userId\":" + ME_ID + "}")));
+                waitUntilABackendWaitsOnALock();
+                assertThat(sync.isDone()).isFalse();
+
+                release.countDown();
+                holder.get(10, TimeUnit.SECONDS);
+                sync.get(10, TimeUnit.SECONDS);
+
+                verifyNoEmailSync();
+            } catch (Exception e) {
+                throw new IllegalStateException(e);
+            } finally {
+                release.countDown();
+                pool.shutdownNow();
+                commit("UPDATE main.\"user\" SET email = ? WHERE id = ?", ME, ME_ID);
+            }
+        });
+    }
+
     @Test
     void aUserWithoutAStripeCustomer_enqueuesNoSync() {
         confirmChangeTo(NEW);

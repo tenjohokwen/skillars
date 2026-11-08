@@ -87,6 +87,7 @@ class SubscriptionPaymentMethodSyncTest {
     @Mock StripeWebhookService stripeWebhookService;
     @Mock PlayerProfileRepository playerProfileRepository;
     @Mock PaymentMethodSyncOutboxSupport paymentMethodSyncOutboxSupport;
+    @Mock StripeCustomerCardWrites stripeCustomerCardWrites;
 
     @InjectMocks SubscriptionService service;
 
@@ -265,14 +266,34 @@ class SubscriptionPaymentMethodSyncTest {
 
     @Test
     void savePaymentMethod_storesCardAndEnqueuesSync_noStripeCall() throws StripeException {
-        savedCard.setStripePaymentMethodId("pm_old");
+        when(stripeCustomerRepository.existsById(USER_ID)).thenReturn(true);
+        when(stripeCustomerCardWrites.writeCardIfPayerLive(USER_ID, PM)).thenReturn(true);
 
         service.savePaymentMethodAndScheduleSync(USER_ID, PM);
 
-        assertThat(savedCard.getStripePaymentMethodId()).isEqualTo(PM);
-        verify(stripeCustomerRepository).save(savedCard);
+        verify(stripeCustomerCardWrites).writeCardIfPayerLive(USER_ID, PM);
+        verify(stripeCustomerRepository, never()).save(any());
         verify(paymentMethodSyncOutboxSupport).enqueueSync(USER_ID, PM);
         verify(stripeClient, never()).updateSubscriptionDefaultPaymentMethod(anyString(), anyString());
+    }
+
+    /** skillars-deferred-176 review round 6: an erased payer gets no card and no sync. */
+    @Test
+    void savePaymentMethod_erasedPayer_writesAndEnqueuesNothing() {
+        when(stripeCustomerRepository.existsById(USER_ID)).thenReturn(true);
+        when(stripeCustomerCardWrites.writeCardIfPayerLive(USER_ID, PM)).thenReturn(false);
+
+        service.savePaymentMethodAndScheduleSync(USER_ID, PM);
+
+        verify(stripeCustomerRepository, never()).save(any());
+        verify(paymentMethodSyncOutboxSupport, never()).enqueueSync(any(), anyString());
+    }
+
+    @Test
+    void savePaymentMethod_noCustomerRow_throws() {
+        assertThatThrownBy(() -> service.savePaymentMethodAndScheduleSync(USER_ID, PM))
+            .isInstanceOf(IllegalStateException.class);
+        verify(stripeCustomerCardWrites, never()).writeCardIfPayerLive(any(), anyString());
     }
 
     @Test

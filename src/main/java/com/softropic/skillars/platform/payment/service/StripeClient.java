@@ -31,6 +31,7 @@ import com.stripe.param.TransferReversalCollectionCreateParams;
 import com.stripe.param.TransferReversalCollectionListParams;
 import com.stripe.param.identity.VerificationSessionCreateParams;
 import com.stripe.param.identity.VerificationSessionRetrieveParams;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
 import java.time.Instant;
@@ -39,6 +40,7 @@ import java.util.UUID;
 /**
  * Thin wrapper around the Stripe SDK static calls so they can be mocked in unit tests.
  */
+@Slf4j
 @Component
 public class StripeClient {
 
@@ -300,12 +302,18 @@ public class StripeClient {
      * already paid at the higher price, the next renewal bills the new one. Idempotency key is
      * caller-supplied (per attempt, or per scheduled change for the retry-safe applicator).
      */
-    public Subscription updateSubscriptionTier(String stripeSubscriptionId, String newPriceId, boolean chargeNow,
-                                               String idempotencyKey) throws StripeException {
+    public TierUpdate updateSubscriptionTier(String stripeSubscriptionId, String newPriceId, boolean chargeNow,
+                                             String idempotencyKey) throws StripeException {
         RequestOptions options = RequestOptions.builder()
             .setIdempotencyKey(idempotencyKey)
             .build();
         Subscription existing = Subscription.retrieve(stripeSubscriptionId);
+        if (alreadyAtPrice(existing, newPriceId)) {
+            // skillars-deferred-176 AC5 (RS07c): a retry after a lost persist would send the same price again with
+            // always_invoice under a fresh key. Nothing to change at Stripe; the caller persists the tier.
+            log.info("[STRIPE_SUBSCRIPTION_PRICE_UNCHANGED] stripeSubId={} priceId={} no update sent", stripeSubscriptionId, newPriceId);
+            return new TierUpdate(existing, false);
+        }
         String itemId = existing.getItems().getData().get(0).getId();
         SubscriptionUpdateParams.Builder params = SubscriptionUpdateParams.builder()
             .addItem(SubscriptionUpdateParams.Item.builder()
@@ -318,7 +326,25 @@ public class StripeClient {
         } else {
             params.setProrationBehavior(SubscriptionUpdateParams.ProrationBehavior.NONE);
         }
-        return existing.update(params.build(), options);
+        return new TierUpdate(existing.update(params.build(), options), true);
+    }
+
+    /**
+     * The subscription after {@link #updateSubscriptionTier}, and whether an update was sent: false when it already carried
+     * the price, so nothing was billed (skillars-deferred-176 round-2 V1: only then may an earlier ungranted upgrade's
+     * charge count as honoured).
+     */
+    public record TierUpdate(Subscription subscription, boolean sent) {
+    }
+
+    /** True when the subscription's first item (the only one this app creates) already carries {@code priceId}. */
+    static boolean alreadyAtPrice(Subscription subscription, String priceId) {
+        if (subscription.getItems() == null || subscription.getItems().getData() == null
+                || subscription.getItems().getData().isEmpty()) {
+            return false;
+        }
+        var price = subscription.getItems().getData().get(0).getPrice();
+        return price != null && priceId != null && priceId.equals(price.getId());
     }
 
     /**

@@ -85,4 +85,45 @@ public interface StripeCustomerRepository extends JpaRepository<StripeCustomer, 
     @Transactional
     @Query("UPDATE StripeCustomer c SET c.lastPaymentIntentId = :intentId WHERE c.parentId = :parentId")
     int updateLastPaymentIntentId(@Param("parentId") Long parentId, @Param("intentId") String intentId);
+
+    /**
+     * skillars-deferred-176 AC3 (RS09g): a pack purchase's card on an existing row, as a one-column UPDATE (no full-row save
+     * of an entity read earlier). Called by {@code StripeCustomerCardWrites} after it locked the row and checked the payer.
+     */
+    @Modifying(flushAutomatically = true, clearAutomatically = true)
+    @Transactional
+    @Query("UPDATE StripeCustomer c SET c.stripePaymentMethodId = :paymentMethodId WHERE c.parentId = :parentId")
+    int updatePaymentMethod(@Param("parentId") Long parentId, @Param("paymentMethodId") String paymentMethodId);
+
+    /**
+     * skillars-deferred-176 (round-1 V2): the erasure drops the saved card with an UPDATE, which takes the row lock even when
+     * the column is already NULL (a load-modify-save of an unchanged entity issues no statement). Joins the erasure
+     * transaction; no {@code clearAutomatically}, which would detach the entities that transaction is still writing.
+     */
+    @Modifying(flushAutomatically = true)
+    @Query("UPDATE StripeCustomer c SET c.stripePaymentMethodId = NULL WHERE c.parentId = :parentId")
+    int clearPaymentMethod(@Param("parentId") Long parentId);
+
+    /**
+     * skillars-deferred-176 AC1 (RS03f): serialises the outbox handlers that write a Stripe customer's email
+     * ({@code STRIPE_CUSTOMER_EMAIL_SYNC}) or erase it ({@code STRIPE_CUSTOMER_ERASURE}). Outbox rows drain in parallel on
+     * every pod, so without it a sync that read the user before an undo or an erasure committed could reach Stripe after
+     * them. Taken inside the outbox claim transaction before the handler reads anything, and held until that transaction
+     * ends, so whichever handler runs second reads what the first one's trigger committed. Blocking: a waiter holds its
+     * outbox thread for at most the holder's Stripe call. The key must be non-blank ({@code hashtext(NULL)} locks nothing).
+     */
+    @Query(value = "SELECT pg_advisory_xact_lock(" + CUSTOMER_OUTBOX_LOCK_NAMESPACE + ", hashtext(:stripeCustomerId))",
+        nativeQuery = true)
+    void acquireCustomerOutboxLock(@Param("stripeCustomerId") String stripeCustomerId);
+
+    /**
+     * skillars-deferred-176 review round 5: the Stripe customer id only, for a handler that needs the
+     * {@link #acquireCustomerOutboxLock} key before it reads the row. A scalar query puts no entity in the persistence
+     * context, so a {@code findById} after the lock wait reads what committed meanwhile instead of a cached copy.
+     */
+    @Query("SELECT c.stripeCustomerId FROM StripeCustomer c WHERE c.parentId = :parentId")
+    Optional<String> findStripeCustomerIdByParentId(@Param("parentId") Long parentId);
+
+    /** {@code pg_advisory_xact_lock(int, int)} namespace for {@link #acquireCustomerOutboxLock} ("SCUL"). */
+    int CUSTOMER_OUTBOX_LOCK_NAMESPACE = 0x5343554C;
 }

@@ -73,6 +73,7 @@ class SessionPackPaymentResourceWebMvcTest {
     @MockitoBean PackSessionService packSessionService;
     @MockitoBean StripeCustomerRepository stripeCustomerRepository;
     @MockitoBean PaymentGateway paymentGateway;
+    @MockitoBean com.softropic.skillars.platform.payment.service.StripeCustomerEmailSyncOutboxSupport stripeCustomerEmailSync;
     @MockitoBean CoachProfileRepository coachProfileRepository;
     @MockitoBean SecurityUtil securityUtil;
     @MockitoBean PaymentProperties paymentProperties;
@@ -242,6 +243,27 @@ class SessionPackPaymentResourceWebMvcTest {
         mockMvc.perform(post("/api/payment/setup-intent").contentType(MediaType.APPLICATION_JSON))
             .andExpect(status().isOk())
             .andExpect(jsonPath("$.clientSecret").value("seti_coach_secret"));
+    }
+
+    // skillars-deferred-176 AC2 (RS03e): the email is read before the customer is created and compared after its row is saved.
+    @Test
+    @WithMockUser(roles = "PARENT")
+    void setupIntent_firstCustomer_checksForAnEmailChangeMadeDuringCreation() throws Exception {
+        when(securityUtil.getCurrentCoachUserId()).thenReturn(PARENT_USER_ID);
+        when(stripeCustomerRepository.findById(PARENT_USER_ID)).thenReturn(Optional.empty());
+        when(stripeCustomerEmailSync.currentEmail(PARENT_USER_ID)).thenReturn("before@example.com");
+        when(paymentGateway.createStripeCustomer(PARENT_USER_ID)).thenReturn("cus_new");
+        when(stripeCustomerRepository.save(org.mockito.ArgumentMatchers.any())).thenAnswer(inv -> inv.getArgument(0));
+        when(paymentGateway.createSetupIntent("cus_new")).thenReturn("seti_new");
+
+        mockMvc.perform(post("/api/payment/setup-intent").contentType(MediaType.APPLICATION_JSON))
+            .andExpect(status().isOk());
+
+        org.mockito.InOrder order = org.mockito.Mockito.inOrder(stripeCustomerEmailSync, paymentGateway, stripeCustomerRepository);
+        order.verify(stripeCustomerEmailSync).currentEmail(PARENT_USER_ID);
+        order.verify(paymentGateway).createStripeCustomer(PARENT_USER_ID);
+        order.verify(stripeCustomerRepository).save(org.mockito.ArgumentMatchers.any());
+        order.verify(stripeCustomerEmailSync).syncIfEmailChangedSince(PARENT_USER_ID, "before@example.com");
     }
 
     @Test

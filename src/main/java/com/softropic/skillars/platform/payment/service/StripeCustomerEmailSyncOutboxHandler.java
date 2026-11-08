@@ -26,13 +26,16 @@ import java.util.Optional;
  * customer Stripe no longer has. A locked account is synced: a suspension is not an erasure, and an undo that restores the
  * owner's address must reach Stripe even while the account is suspended. Any other request Stripe rejects is logged and dropped,
  * since retrying it cannot succeed; a rate limit or outage throws, leaving the row for the next drain.
+ *
+ * <p>skillars-deferred-176 AC1: runs under {@link StripeCustomerRepository#acquireCustomerOutboxLock}, shared with
+ * {@link StripeCustomerErasureOutboxHandler}, so a confirm's sync and an undo's sync, or a sync and an erasure, never
+ * reach Stripe out of order.
  */
 @Slf4j
 @Component
 public class StripeCustomerEmailSyncOutboxHandler implements OutboxMessageHandler {
 
     private static final String RESOURCE_MISSING = "resource_missing";
-    private static final String ERASED_EMAIL_DOMAIN = "@erased.io";
 
     private final StripeClient stripeClient;
     private final StripeCustomerRepository stripeCustomerRepository;
@@ -60,14 +63,17 @@ public class StripeCustomerEmailSyncOutboxHandler implements OutboxMessageHandle
         } catch (JsonProcessingException e) {
             throw new UncheckedIOException(e);
         }
-        Optional<User> user = userRepository.findOneById(userId);
-        if (user.isEmpty() || user.get().getEmail() == null || user.get().getEmail().isBlank()
-                || user.get().getEmail().endsWith(ERASED_EMAIL_DOMAIN)) {
-            log.info("[STRIPE_CUSTOMER_EMAIL_SYNC_SKIPPED userId={}] account gone or erased", userId);
-            return;
-        }
         Optional<String> customerId = stripeCustomerRepository.findById(userId).map(StripeCustomer::getStripeCustomerId);
         if (customerId.isEmpty() || customerId.get().isBlank()) {
+            return;
+        }
+        // skillars-deferred-176 AC1: the user is read only after the lock, so a confirm/undo or erasure that committed
+        // while another handler held it is what this one sees.
+        stripeCustomerRepository.acquireCustomerOutboxLock(customerId.get());
+        Optional<User> user = userRepository.findOneById(userId);
+        if (user.isEmpty() || user.get().getEmail() == null || user.get().getEmail().isBlank()
+                || StripeCustomerCardWrites.isErasureTombstone(userId, user.get().getEmail())) {
+            log.info("[STRIPE_CUSTOMER_EMAIL_SYNC_SKIPPED userId={}] account gone or erased", userId);
             return;
         }
         try {
