@@ -514,7 +514,9 @@ export default {
     wrapUp: {
       step4DnaError: 'Session-DNA konnte nicht geladen werden.',
       step1Title: 'Anwesenheit',
-      step1Label: 'Spieler war anwesend',
+      step1Question: 'War {name} anwesend?',
+      step1Attended: 'Anwesend',
+      step1Absent: 'Nicht anwesend',
       step2Title: 'Sitzungsbewertungen',
       step2Effort: 'Einsatz',
       step2Focus: 'Fokus',

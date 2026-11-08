@@ -2216,7 +2216,9 @@ export default {
     },
     wrapUp: {
       step1Title: 'Attendance',
-      step1Label: 'Player attended',
+      step1Question: 'Did {name} attend?',
+      step1Attended: 'Attended',
+      step1Absent: "Didn't attend",
       step2Title: 'Session Ratings',
       step2Effort: 'Effort',
       step2Focus: 'Focus',
