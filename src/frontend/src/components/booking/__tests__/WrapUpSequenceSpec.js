@@ -175,6 +175,26 @@ describe('WrapUpSequence.vue — session recap step (skillars-12-2)', () => {
     }
   })
 
+  it('Back in the beat after five stars is not undone by the auto-advance', async () => {
+    vi.useFakeTimers()
+    try {
+      const wrapper = mountComponent()
+      await flushPromises()
+      wrapper.vm.$.setupState.step = 2
+      wrapper.vm.$.setupState.currentRating = 'technique'
+      await flushPromises()
+
+      wrapper.findComponent({ name: 'QRating' }).vm.$emit('update:modelValue', 5)
+      await flushPromises()
+      await wrapper.find('[data-testid="wrap-up-back"]').trigger('click')
+      vi.advanceTimersByTime(200)
+      await flushPromises()
+      expect(wrapper.vm.$.setupState.step).toBe(1)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('four stars for technique waits for Next', async () => {
     vi.useFakeTimers()
     try {
