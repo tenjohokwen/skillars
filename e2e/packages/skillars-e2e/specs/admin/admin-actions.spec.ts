@@ -111,9 +111,12 @@ test.describe('R · Moderation', () => {
       await moderation.review(removedId).click()
       await moderation.reviewBlockOpen().click()
       await moderation.reviewBlockReason().fill('Personal remarks, not about the session.')
-      await moderation.reviewBlockSubmit().click()
-      // The dialog closes once the block is saved; the queue then reloads without the review.
-      await expect(moderation.reviewBlockSubmit()).toBeHidden({ timeout: 30_000 })
+      // The dialog closes once the block is saved; the queue then reloads without the review. A click that lands
+      // while the stacked dialog is still opening is lost, so it is retried (a second block is answered 409, handled).
+      await expect(async () => {
+        await moderation.reviewBlockSubmit().click({ timeout: 2_000 })
+        await expect(moderation.reviewBlockSubmit()).toBeHidden({ timeout: 5_000 })
+      }).toPass({ timeout: 30_000 })
       await expect
         .poll(async () => (await provision.reviewOf(coach, removed))?.status)
         .toBe('BLOCKED')

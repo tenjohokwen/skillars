@@ -15,5 +15,8 @@ public record AppealDecidedEvent(
     AppealStatus outcome,
     AppealSubjectType subjectType,
     String decisionNote,
+    /** For OVERTURNED: whether the original decision was actually undone (false for a dispute resolution, a strike
+     *  already gone, a coach since re-suspended…). Null for UPHELD. */
+    Boolean reversalApplied,
     AdminNotificationRecipient recipient) {
 }

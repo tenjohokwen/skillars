@@ -2844,8 +2844,7 @@ export default {
       REVIEW_BLOCKED: 'Votre avis sur {coachDisplayName} n’a pas été publié.',
       APPEAL_UPHELD:
         'Votre recours a été examiné : la décision initiale est maintenue. L’e-mail en donne la raison.',
-      APPEAL_OVERTURNED:
-        'Votre recours a été accepté : la décision a été annulée. L’e-mail en donne le détail.',
+      APPEAL_OVERTURNED: 'Votre recours a été accepté. L’e-mail en donne le détail.',
     },
     preferences: {
       title: 'Notifications par e-mail',

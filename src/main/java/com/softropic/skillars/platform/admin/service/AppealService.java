@@ -176,7 +176,8 @@ public class AppealService {
         // transaction (the listener enqueues BEFORE_COMMIT), so a rolled-back decision sends nothing.
         Long appellant = appealRepository.findById(appealId).map(Appeal::getAppellantUserId).orElse(null);
         eventPublisher.publishEvent(new com.softropic.skillars.platform.admin.contract.AppealDecidedEvent(
-            appealId, outcome, subjectType, note.trim(), recipientResolver.forUser(appellant).orElse(null)));
+            appealId, outcome, subjectType, note.trim(), reversalApplied,
+            recipientResolver.forUser(appellant).orElse(null)));
         log.info("[APPEAL_DECIDED] appealId={} outcome={} subjectType={} subjectId={} adminId={}",
             appealId, outcome, subjectType, subjectId, adminId);
         return getDetail(appealId);

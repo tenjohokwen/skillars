@@ -166,15 +166,16 @@ class AdminOutcomeEmailListenerTest {
         var recipient = new com.softropic.skillars.platform.admin.contract.AdminNotificationRecipient("to@x.test", "de");
         listener.onAppealDecided(new com.softropic.skillars.platform.admin.contract.AppealDecidedEvent(UUID.randomUUID(),
             com.softropic.skillars.platform.admin.contract.AppealStatus.OVERTURNED,
-            com.softropic.skillars.platform.admin.contract.AppealSubjectType.RELIABILITY_STRIKE, "Reversed.", recipient));
+            com.softropic.skillars.platform.admin.contract.AppealSubjectType.RELIABILITY_STRIKE, "Reversed.", true, recipient));
         assertThat(sent(EmailTemplate.APPEAL_OVERTURNED))
             .containsEntry("decisionNote", "Reversed.")
             .containsEntry("appealSubject", "RELIABILITY_STRIKE")
-            .containsEntry("pageUrl", "https://app.test/#/coach/reliability");
+            .containsEntry("pageUrl", "https://app.test/#/coach/reliability")
+            .containsEntry("reversalApplied", "true");
 
         listener.onAppealDecided(new com.softropic.skillars.platform.admin.contract.AppealDecidedEvent(UUID.randomUUID(),
             com.softropic.skillars.platform.admin.contract.AppealStatus.UPHELD,
-            com.softropic.skillars.platform.admin.contract.AppealSubjectType.COACH_SUSPENSION, "Stands.", recipient));
+            com.softropic.skillars.platform.admin.contract.AppealSubjectType.COACH_SUSPENSION, "Stands.", null, recipient));
         assertThat(sent(EmailTemplate.APPEAL_UPHELD)).containsEntry("pageUrl", "https://app.test/#/profile");
     }
 

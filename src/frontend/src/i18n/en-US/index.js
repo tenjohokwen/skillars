@@ -2808,8 +2808,7 @@ export default {
       REVIEW_BLOCKED: 'Your review of {coachDisplayName} was not published.',
       APPEAL_UPHELD:
         'Your appeal was reviewed: the original decision stands. The email has the reason.',
-      APPEAL_OVERTURNED:
-        'Your appeal was successful: the decision was reversed. The email has the details.',
+      APPEAL_OVERTURNED: 'Your appeal was accepted. The email has the details.',
     },
     preferences: {
       title: 'Email notifications',

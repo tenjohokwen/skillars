@@ -120,6 +120,8 @@ public class AdminOutcomeEmailListener {
         data.put("appealSubject", event.subjectType() == null ? "" : event.subjectType().name());
         data.put("decisionNote", text(event.decisionNote()));
         data.put("pageUrl", frontendLinks.route(appealPage(event.subjectType())));
+        // "reversed" only when the reversal really happened; otherwise the email says the appeal was accepted.
+        data.put("reversalApplied", Boolean.TRUE.equals(event.reversalApplied()) ? "true" : "false");
         EmailTemplate template = event.outcome() == AppealStatus.OVERTURNED
             ? EmailTemplate.APPEAL_OVERTURNED : EmailTemplate.APPEAL_UPHELD;
         send(template, event.recipient(), data, "appealId", event.appealId());

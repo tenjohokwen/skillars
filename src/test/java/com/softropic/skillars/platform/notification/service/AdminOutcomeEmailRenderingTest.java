@@ -45,6 +45,7 @@ class AdminOutcomeEmailRenderingTest {
         data.put("appealSubject", "RELIABILITY_STRIKE");
         data.put("decisionNote", "The family confirmed it.");
         data.put("pageUrl", "https://app.test/#/coach/reliability");
+        data.put("reversalApplied", "false");
         data.put("reason", "Reason <b>text</b>");
         data.put("disputeReason", "SESSION_QUALITY");
         data.put("resolution", "PARTIAL_CREDIT");
