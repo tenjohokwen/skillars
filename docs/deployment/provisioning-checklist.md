@@ -764,15 +764,13 @@ self-referential FK V224 shipped `NOT VALID` is validated. Nothing to configure,
       is signed out mid-task and must log in again. Three attempts to remove the cap were made and
       withdrawn during that story (the third broke logout outright); the real fix is frontend rotation,
       filed as its own story in `deferred-work.md`. Tell support before this ships.
-- [ ] **Accepted gap, and it does NOT self-clear: JWTs minted before this deploy are never checked.** They
-      carry no `rtsid` claim and the filter deliberately fails open for them, because failing closed would
-      sign every live session out at deploy. A claimless token presented WITH its `rtkn` cookie is
-      repaired — the filter re-derives the chain id from that cookie, owner-scoped — so the exposed
-      population is narrower than it first appears: a holder presenting a claimless `potc` WITHOUT the
-      matching cookie, which is precisely a thief who copied only that cookie. For them the session stays
-      alive as long as they keep making requests, and waiting 7 days does not close it. The flip to fail-closed needs a deliberate
-      trigger (a forced re-login, or accepting that remaining claimless holders are signed out at the
-      flip); tracked as an owner decision in `deferred-work.md`.
+- [x] **Closed by skillars-deferred-180: a JWT with no `rtsid` claim is now refused** on its next DB-reauth
+      cycle (within 5 min) unless the request's own `rtkn` lets the filter re-derive the chain id. Shipped
+      before go-live, so only UAT sessions older than V225 whose chain never rotated are signed out (once).
+- [ ] **Before shipping any client that calls `POST /api/auth/refresh` (a mobile app, an API client):**
+      revisit the `MAX_GRACE_HOPS` residual in `deferred-work.md`. A stale refresh cookie more than 8
+      rotations behind a live chain is treated as reuse and signs the account out of every device. The SPA
+      never rotates, so nothing reaches it today.
 - [ ] **Narrowed detection, and a changed blast radius.** A used refresh token presented against a chain
       that is still live, more than 30 s after its rotation, now answers `401` and revokes **that chain
       only**, where it used to revoke every chain on the account and bump the session epoch. The change
@@ -920,7 +918,9 @@ logged at DEBUG and acknowledged):
     to credit), refuse cash-out while the dispute is open, restore the credit on a won dispute, and
     cut or cancel the payout of a session that completes after a lost one. No new event types.
   - `charge.refunded` covers refunds made in the Dashboard (raises an `EXTERNAL_REFUND` admin
-    alert).
+    alert). Operators: a full refund of a pack charge revokes the pack's remaining sessions; a partial
+    one leaves the pack whole (owner decision 2026-11-08: partial = goodwill). To take sessions back,
+    refund in full.
   - `account.updated` (Connect endpoint) is the primary path that marks a coach's Connect account
     `COMPLETE` or `RESTRICTED` (and records the `transfers` capability that gates payouts). The
     fallback reads the account from Stripe when the coach returns from OAuth and, at most every
@@ -1631,3 +1631,9 @@ an operator must now do.
   (recreate Grafana after pulling), and the Payments & Payouts "Mismatches and failures" panel shows it and
   `[PACK_PURCHASE_ATTEMPT_CLOSED_BEFORE_CHARGE]`. The pack-attempt resolver now uses Stripe's PaymentIntent Search API as a
   fallback (no setup needed; Search is unavailable in India). No new job, webhook, config key or env var.
+- 2026-11-08: skillars-deferred-180 (no migration). A JWT without the `rtsid` chain claim is refused unless its own `rtkn`
+  names a live chain (UAT sessions older than V225 may be signed out once). `POST /api/payment/session-packs/purchase` requires
+  `Idempotency-Key` (400 `payment.idempotencyKeyRequired`; the SPA already sends it). `POST /api/auth/refresh` and
+  `/api/auth/logout` are rate-limited to 20 a minute per IP. A partial Dashboard refund of a pack leaves the pack whole.
+  New checklist item: revisit `MAX_GRACE_HOPS` before shipping a client that calls `POST /api/auth/refresh`. No new job,
+  webhook, config key or env var.

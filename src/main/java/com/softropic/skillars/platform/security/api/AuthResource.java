@@ -1,5 +1,6 @@
 package com.softropic.skillars.platform.security.api;
 
+import com.softropic.skillars.infrastructure.security.RateLimited;
 import com.softropic.skillars.platform.security.contract.LoginRequest;
 import com.softropic.skillars.platform.security.contract.LoginResponse;
 import com.softropic.skillars.platform.security.service.AuthService;
@@ -59,14 +60,21 @@ public class AuthResource {
      * This is <b>not</b> the same as {@code /refresh} (see class JavaDoc): that endpoint only
      * extends the TTL of an already-valid session and returns an empty {@code 200}.
      */
+    // skillars-deferred-180: refresh and logout are permitAll and both lock the presented refresh-token row
+    // PESSIMISTIC_WRITE, which PostgreSQL waits on without a bound. Unlimited, parallel replays of one rtkn (anyone's
+    // own) queue on that row, each holding a pooled connection, until the pool is exhausted. Per IP, like every bucket;
+    // 20 a minute so a household or club behind one NAT never meets it. Bounding the wait itself (SET LOCAL
+    // lock_timeout) stays in deferred-work.md as the follow-up for a many-source flood.
     @PostMapping("/refresh")
     @PreAuthorize("permitAll()")
+    @RateLimited(key = "auth_refresh", capacity = 20, duration = 1)
     public ResponseEntity<LoginResponse> refresh(HttpServletRequest req, HttpServletResponse res) {
         return ResponseEntity.ok(authService.refresh(req, res));
     }
 
     @PostMapping("/logout")
     @PreAuthorize("permitAll()")
+    @RateLimited(key = "auth_logout", capacity = 20, duration = 1)
     public ResponseEntity<Void> logout(HttpServletRequest req, HttpServletResponse res) {
         authService.logout(req, res);
         return ResponseEntity.noContent().build();

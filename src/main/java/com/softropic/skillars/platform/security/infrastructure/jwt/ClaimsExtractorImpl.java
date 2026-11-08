@@ -141,9 +141,9 @@ public class ClaimsExtractorImpl implements ClaimsExtractor {
      * ({@code SecurityConstants.RTKN_SESSION}), or {@code null} when the token carries no such claim —
      * every JWT minted before this story, and every anonymous token.
      *
-     * <p>Returning {@code null} is a normal, expected answer, not an error: the filter skips its
-     * chain-liveness check for such a token (AC5, deliberately fail-open) because failing closed would
-     * sign out every live session the moment this deploys.
+     * <p>Returning {@code null} is a normal answer, not an error: the filter then tries to re-derive the
+     * id from the request's own {@code rtkn} cookie and, failing that, refuses the token at its DB re-auth
+     * (skillars-deferred-180; until then skillars-deferred-167 AC5 skipped the check instead).
      *
      * <p>Read as a {@code String} and parsed, rather than cast: a uuid claim round-trips through JJWT's
      * JSON as a string, and a malformed one is treated as absent rather than thrown — a JWT whose claim

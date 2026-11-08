@@ -173,8 +173,8 @@
       <tr><td>GET</td><td><code>/api/security/age-verification</code></td><td>S-27: the caller's age-verification state (<code>applicable</code>, <code>enabled</code>, <code>state</code> = NOT_STARTED / PENDING / FAILED / VERIFIED / BLOCKED, <code>attemptsRemainingToday</code>)</td><td>ROLE_PLAYER</td></tr>
       <tr><td>POST</td><td><code>/api/security/age-verification/session</code></td><td>S-27: start or resume a Stripe Identity session; returns <code>{state, url}</code> (the hosted Stripe page). <code>@RateLimited</code> 5 per 10 min per IP, daily cap per user. 403 gate / 429 <code>security.ageVerificationAttemptsExceeded</code> / 503 <code>security.ageVerificationUnavailable</code></td><td>ROLE_PLAYER</td></tr>
       <tr><td>POST</td><td><code>/api/auth/login</code></td><td>SPA password login; issues JWT + refresh-token + <code>skp</code> cookies</td><td>Public</td></tr>
-      <tr><td>POST</td><td><code>/api/auth/refresh</code></td><td>Rotate refresh token, reissue JWT</td><td>Public (refresh-token cookie)</td></tr>
-      <tr><td>POST</td><td><code>/api/auth/logout</code></td><td>Revoke the refresh token, clear cookies</td><td>Public</td></tr>
+      <tr><td>POST</td><td><code>/api/auth/refresh</code></td><td>Rotate refresh token, reissue JWT. <code>@RateLimited</code> 20/min per IP</td><td>Public (refresh-token cookie)</td></tr>
+      <tr><td>POST</td><td><code>/api/auth/logout</code></td><td>Revoke the refresh token, clear cookies. <code>@RateLimited</code> 20/min per IP</td><td>Public</td></tr>
       <tr><td>GET (any verb)</td><td><code>/refresh</code></td><td>Keep-alive: <code>JWTAuthorizationFilter</code> extends the JWT, <code>SessionRefreshFilter</code> returns an empty 200</td><td>Any authenticated role</td></tr>
       <tr><td>POST</td><td><code>/api/logout</code></td><td>Spring Security logout (POST only, so a cross-site GET cannot trigger it): a <code>LogoutHandler</code> runs <code>SecurityUtil.terminateSession</code> (revokes the <code>rtkn</code> refresh token, clears cookies), then <code>AjaxLogoutSuccessHandler</code> answers 200</td><td>Public</td></tr>
       <tr><td>POST</td><td><code>/v1/account/register</code></td><td>Legacy full account registration (<code>RegisterPage.vue</code>)</td><td>Public</td></tr>
@@ -486,9 +486,10 @@ sequenceDiagram
       suspension, GDPR erasure, refresh-token-theft revocation <em>and now a plain logout</em> all take effect on open
       sessions within at most 5 minutes &mdash; the chain check is what closes logout, which the account-wide epoch
       deliberately does not cover (bumping it would sign the user out of their other devices). Two consequences worth
-      knowing: a JWT minted before that story carries no <code>rtsid</code>; presented WITH its <code>rtkn</code>
-      cookie the claim is re-derived and the check applies, presented without it the check is deliberately
-      skipped (failing closed at deploy would end every live session), and the refresh chain's 7-day TTL now caps a session &mdash; but it binds the SPA, not
+      knowing: a JWT with no <code>rtsid</code> claim (minted before that story, or stripped by an older instance during
+      a rolling deploy) presented WITH its <code>rtkn</code> cookie has the claim re-derived and checked; presented
+      without it, it is refused (fail-closed since skillars-deferred-180; the browser binding in
+      <code>isTokenFixed</code> compares only client-sent values, so it does not stop a copied cookie jar), and the refresh chain's 7-day TTL now caps a session &mdash; but it binds the SPA, not
       API clients: every rotation writes a fresh <code>expires_at</code>, so a client that keeps refreshing
       is never capped, while the SPA (which has no caller for <code>POST /api/auth/refresh</code>) keeps the
       deadline written at login. Three attempts to remove that were withdrawn; see

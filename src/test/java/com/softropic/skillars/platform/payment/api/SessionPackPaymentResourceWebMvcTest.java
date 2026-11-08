@@ -447,12 +447,13 @@ class SessionPackPaymentResourceWebMvcTest {
         when(securityUtil.getCurrentCoachUserId()).thenReturn(PARENT_USER_ID);
         java.util.UUID packTierId = java.util.UUID.randomUUID();
         when(sessionPackPaymentService.purchasePack(eq(PARENT_USER_ID), eq(packTierId), eq(1L), any(),
-                org.mockito.ArgumentMatchers.isNull()))
+                eq("player-attempt-0001")))
             .thenReturn(new SessionPackPurchaseResponse(
                 java.util.UUID.randomUUID(), packTierId, "Starter", 5, 5, new BigDecimal("20.00"),
                 Instant.now().plusSeconds(3600), "pi_test", 1L, java.util.UUID.randomUUID(), null, "ACTIVE", null, null, 90));
 
         mockMvc.perform(post("/api/payment/session-packs/purchase")
+                .header("Idempotency-Key", "player-attempt-0001")
                 .contentType(MediaType.APPLICATION_JSON)
                 .content("{\"packTierId\":\"" + packTierId + "\",\"playerId\":1}"))
             .andExpect(status().isCreated());
@@ -486,6 +487,7 @@ class SessionPackPaymentResourceWebMvcTest {
                 "payment.coachStripeNotConfigured"));
 
         mockMvc.perform(post("/api/payment/session-packs/purchase")
+                .header("Idempotency-Key", "attempt-0002")
                 .contentType(MediaType.APPLICATION_JSON)
                 .content("{\"packTierId\":\"" + packTierId + "\",\"playerId\":1}"))
             .andExpect(status().isUnprocessableEntity())
@@ -602,9 +604,39 @@ class SessionPackPaymentResourceWebMvcTest {
     @WithMockUser(roles = "PARENT")
     void purchaseSessionPack_malformedPaymentMethodId_returns400() throws Exception {
         mockMvc.perform(post("/api/payment/session-packs/purchase")
+                .header("Idempotency-Key", "attempt-0003")
                 .contentType(MediaType.APPLICATION_JSON)
                 .content("{\"packTierId\":\"" + java.util.UUID.randomUUID() + "\",\"playerId\":7,\"paymentMethodId\":\"tok_x\"}"))
             .andExpect(status().isBadRequest());
+        org.mockito.Mockito.verifyNoInteractions(sessionPackPaymentService);
+    }
+
+    /** skillars-deferred-180 (RS06c): a purchase without a client idempotency key is refused before the service. */
+    @Test
+    @WithMockUser(roles = "PARENT")
+    void purchaseSessionPack_withoutIdempotencyKey_returns400() throws Exception {
+        mockMvc.perform(post("/api/payment/session-packs/purchase")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"packTierId\":\"" + java.util.UUID.randomUUID() + "\",\"playerId\":1}"))
+            .andExpect(status().isBadRequest())
+            .andExpect(r -> org.assertj.core.api.Assertions.assertThat(
+                ((org.springframework.web.server.ResponseStatusException) r.getResolvedException()).getReason())
+                .isEqualTo("payment.idempotencyKeyRequired"));
+        org.mockito.Mockito.verifyNoInteractions(sessionPackPaymentService);
+    }
+
+    /** skillars-deferred-180 (RS06c): a blank key counts as missing. */
+    @Test
+    @WithMockUser(roles = "PARENT")
+    void purchaseSessionPack_blankIdempotencyKey_returns400() throws Exception {
+        mockMvc.perform(post("/api/payment/session-packs/purchase")
+                .header("Idempotency-Key", "   ")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"packTierId\":\"" + java.util.UUID.randomUUID() + "\",\"playerId\":1}"))
+            .andExpect(status().isBadRequest())
+            .andExpect(r -> org.assertj.core.api.Assertions.assertThat(
+                ((org.springframework.web.server.ResponseStatusException) r.getResolvedException()).getReason())
+                .isEqualTo("payment.idempotencyKeyRequired"));
         org.mockito.Mockito.verifyNoInteractions(sessionPackPaymentService);
     }
 }

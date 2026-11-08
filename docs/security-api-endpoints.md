@@ -30,8 +30,8 @@ These are the endpoints the Vue SPA uses (`src/frontend/src/api/auth.api.js`, `b
 | Method | Path | Auth | Purpose |
 |--------|------|------|---------|
 | POST | `/api/auth/login` | public | Email + password login. Sets `potc`, `rtkn`, `skp`. |
-| POST | `/api/auth/refresh` | public (needs `rtkn`) | Rotates the refresh token and mints a new JWT. |
-| POST | `/api/auth/logout` | public | Revokes this session's refresh-token chain, clears all auth cookies, and ends that session's access token within 5 min (`rtsid` claim, skillars-deferred-167). `204`. |
+| POST | `/api/auth/refresh` | public (needs `rtkn`) | Rotates the refresh token and mints a new JWT. `@RateLimited` 20 a minute per IP (429). |
+| POST | `/api/auth/logout` | public | Revokes this session's refresh-token chain, clears all auth cookies, and ends that session's access token within 5 min (`rtsid` claim, skillars-deferred-167). `204`. `@RateLimited` 20 a minute per IP (429). |
 | POST | `/refresh` | any authenticated role | Extends the TTL of an already-valid JWT session. Empty `200`. |
 
 ### `POST /api/auth/login`
@@ -96,6 +96,12 @@ Revokes the refresh token in the `rtkn` cookie **and every token it was rotated 
 chain is what makes Logout end a session that was refreshed a moment earlier: a single-row revoke
 could not touch the already-rotated row, so its successor used to stay live for the rest of its
 7-day TTL (skillars-deferred-166).
+
+Both this endpoint and `POST /api/auth/refresh` lock the presented refresh-token row, and PostgreSQL waits on
+that lock without a bound, so each is `@RateLimited` (20 a minute per IP, skillars-deferred-180): without it,
+parallel replays of one `rtkn` (anyone's own) queued on the row with a pooled connection each until the pool
+was exhausted. A repeated logout of an already-revoked chain is answered by an unlocked pre-check, so the
+unannotated Spring `POST /api/logout` reaches the lock only until the first revoke commits.
 
 ### Login rate limit
 
