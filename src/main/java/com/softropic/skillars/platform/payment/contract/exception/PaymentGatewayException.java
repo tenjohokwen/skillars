@@ -8,6 +8,9 @@ public class PaymentGatewayException extends RuntimeException {
      */
     public static final String CARD_DECLINED = "payment.cardDeclined";
 
+    /** skillars-deferred-177 (RS03h): the payer was erased while the request ran; nothing was charged. */
+    public static final String ACCOUNT_ERASED = "payment.accountErased";
+
     private final String errorCode;
 
     public PaymentGatewayException(String errorCode) {

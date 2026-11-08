@@ -213,6 +213,11 @@ public class SessionPackPaymentService {
         } catch (RuntimeException e) {
             // Nothing could have been charged yet (a Stripe customer create, or a DB write of the card).
             markNoCharge(attempt);
+            if (e instanceof PaymentGatewayException pge && PaymentGatewayException.ACCOUNT_ERASED.equals(pge.getErrorCode())) {
+                // skillars-deferred-177 (review round 2): an erasure that committed after customerBefore was read nulled the
+                // attempt cards before this row existed; drop the card ids this row carries too.
+                attemptRepository.nullCardsForParent(parentId);
+            }
             throw e instanceof PaymentGatewayException ? new PackNoChargeException(e) : e;
         }
         try {
@@ -1085,7 +1090,7 @@ public class SessionPackPaymentService {
      */
     public static PaymentGatewayException erasedPayer(Long parentId) {
         log.warn("[PAYMENT_REFUSED_ACCOUNT_ERASED parentId={}] the payer was erased while the request ran", parentId);
-        return new PaymentGatewayException("payment.accountErased");
+        return new PaymentGatewayException(PaymentGatewayException.ACCOUNT_ERASED);
     }
 
     private SessionPackPurchase createPurchase(Long parentId, Long playerId, SessionPackTier tier, String paymentIntentId) {

@@ -205,8 +205,12 @@ public class StripeClient {
         return Transfer.retrieve(transferId, options).getReversals().create(params, options);
     }
 
-    public Customer createCustomer(CustomerCreateParams params) throws StripeException {
-        return Customer.create(params);
+    /**
+     * skillars-deferred-177 (review round 2): with a caller-derived idempotency key, so two concurrent first requests of one
+     * payer get the same Stripe customer instead of one that no {@code stripe_customers} row (and so no erasure) ever names.
+     */
+    public Customer createCustomer(CustomerCreateParams params, String idempotencyKey) throws StripeException {
+        return Customer.create(params, RequestOptions.builder().setIdempotencyKey(idempotencyKey).build());
     }
 
     public Customer retrieveCustomer(String stripeCustomerId) throws StripeException {

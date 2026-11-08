@@ -19,7 +19,7 @@ public class PaymentApiAdvice {
     public ResponseEntity<ErrorDto> paymentGatewayExceptionHandler(PaymentGatewayException ex) {
         if ("payment.coachStripeNotConfigured".equals(ex.getErrorCode())) {
             log.warn("Booking or pack purchase blocked — coach Stripe not configured: {}", ex.getErrorCode());
-        } else if ("payment.accountErased".equals(ex.getErrorCode())) {
+        } else if (PaymentGatewayException.ACCOUNT_ERASED.equals(ex.getErrorCode())) {
             // skillars-deferred-177 (RS03h): the payer's own erasure ran during the request (the service logged the id).
             log.warn("Payment refused — the payer was erased during the request");
         } else if (PaymentGatewayException.CARD_DECLINED.equals(ex.getErrorCode())) {

@@ -682,10 +682,26 @@ public class StripePaymentGateway implements PaymentGateway {
             .ifPresent(customer::setEmail);
         CustomerCreateParams params = customer.build();
         try {
-            return stripeClient.createCustomer(params).getId();
+            return stripeClient.createCustomer(params, customerCreateKey(parentId, params.getEmail())).getId();
         } catch (StripeException e) {
             log.error("Stripe customer creation failed: parentId={} error={}", parentId, e.getMessage());
             throw new PaymentGatewayException("payment.customerCreationFailed");
+        }
+    }
+
+    /**
+     * skillars-deferred-177 (review round 2): concurrent first requests of one payer (a double-clicked card form, a SetupIntent
+     * racing a pack purchase) send the same parameters, so Stripe answers both with one customer and the request that loses
+     * the {@code stripe_customers} insert leaves no unrecorded customer behind. The email's hash is part of the key: Stripe
+     * rejects a reused key whose parameters differ, which an email changed within its 24-hour key window would otherwise do.
+     */
+    static String customerCreateKey(Long parentId, String email) {
+        try {
+            byte[] digest = java.security.MessageDigest.getInstance("SHA-256")
+                .digest(String.valueOf(email).getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            return "customer-create-" + parentId + "-" + java.util.HexFormat.of().formatHex(digest, 0, 8);
+        } catch (java.security.NoSuchAlgorithmException e) {
+            throw new IllegalStateException(e); // SHA-256 is mandatory on every JVM
         }
     }
 

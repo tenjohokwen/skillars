@@ -32,6 +32,7 @@ import java.util.UUID;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -745,12 +746,12 @@ class StripePaymentGatewayTest {
         when(userRepository.findOneById(1001L)).thenReturn(java.util.Optional.of(user));
         Customer customer = new Customer();
         customer.setId("cus_new");
-        when(stripeClient.createCustomer(any(CustomerCreateParams.class))).thenReturn(customer);
+        when(stripeClient.createCustomer(any(CustomerCreateParams.class), anyString())).thenReturn(customer);
 
         stripePaymentGateway.createStripeCustomer(1001L);
 
         ArgumentCaptor<CustomerCreateParams> paramsCaptor = ArgumentCaptor.forClass(CustomerCreateParams.class);
-        org.mockito.Mockito.verify(stripeClient).createCustomer(paramsCaptor.capture());
+        org.mockito.Mockito.verify(stripeClient).createCustomer(paramsCaptor.capture(), anyString());
         assertThat(paramsCaptor.getValue().getEmail()).isEqualTo("parent@example.com");
         assertThat(paramsCaptor.getValue().getName()).isNull();
         assertThat(paramsCaptor.getValue().getPhone()).isNull();
@@ -770,16 +771,37 @@ class StripePaymentGatewayTest {
         assertThat(stripePaymentGateway.cardFingerprint(" ")).isEmpty();
     }
 
+    /** skillars-deferred-177 (review round 2): one key per payer and email, so concurrent first requests share a customer. */
+    @Test
+    void createStripeCustomer_sendsAnIdempotencyKeyFromThePayerAndTheEmail() throws StripeException {
+        var user = new com.softropic.skillars.platform.security.repo.User();
+        user.setEmail("parent@example.com");
+        when(userRepository.findOneById(1001L)).thenReturn(java.util.Optional.of(user));
+        Customer customer = new Customer();
+        customer.setId("cus_new");
+        when(stripeClient.createCustomer(any(CustomerCreateParams.class), anyString())).thenReturn(customer);
+
+        stripePaymentGateway.createStripeCustomer(1001L);
+
+        org.mockito.Mockito.verify(stripeClient).createCustomer(any(CustomerCreateParams.class),
+            org.mockito.ArgumentMatchers.eq(StripePaymentGateway.customerCreateKey(1001L, "parent@example.com")));
+        assertThat(StripePaymentGateway.customerCreateKey(1001L, "parent@example.com"))
+            .startsWith("customer-create-1001-")
+            .isEqualTo(StripePaymentGateway.customerCreateKey(1001L, "parent@example.com"))
+            .isNotEqualTo(StripePaymentGateway.customerCreateKey(1001L, "new@example.com"))
+            .isNotEqualTo(StripePaymentGateway.customerCreateKey(1002L, "parent@example.com"));
+    }
+
     @Test
     void createStripeCustomer_tagsMetadataWithUserId() throws StripeException {
         Customer customer = new Customer();
         customer.setId("cus_new");
-        when(stripeClient.createCustomer(any(CustomerCreateParams.class))).thenReturn(customer);
+        when(stripeClient.createCustomer(any(CustomerCreateParams.class), anyString())).thenReturn(customer);
 
         stripePaymentGateway.createStripeCustomer(1001L);
 
         ArgumentCaptor<CustomerCreateParams> paramsCaptor = ArgumentCaptor.forClass(CustomerCreateParams.class);
-        org.mockito.Mockito.verify(stripeClient).createCustomer(paramsCaptor.capture());
+        org.mockito.Mockito.verify(stripeClient).createCustomer(paramsCaptor.capture(), anyString());
         @SuppressWarnings("unchecked")
         Map<String, String> metadata = (Map<String, String>) paramsCaptor.getValue().getMetadata();
         assertThat(metadata).containsExactly(org.assertj.core.api.Assertions.entry("userId", "1001"));

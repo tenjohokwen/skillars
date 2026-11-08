@@ -778,7 +778,10 @@ class SessionPackPaymentServiceTest {
 
     private void assertRefusedAsErased(String paymentMethodId) {
         assertThatThrownBy(() -> sessionPackPaymentService.purchasePack(PARENT_ID, TIER_ID, PLAYER_ID, paymentMethodId, KEY))
-            .isInstanceOf(com.softropic.skillars.platform.payment.contract.exception.PackNoChargeException.class);
+            .isInstanceOf(com.softropic.skillars.platform.payment.contract.exception.PackNoChargeException.class)
+            .hasMessage(PaymentGatewayException.ACCOUNT_ERASED);
+        // review round 2: the attempt row written after the erasure's own card nulling loses its card ids too
+        verify(attemptRepository).nullCardsForParent(PARENT_ID);
         verify(paymentGateway, never()).chargeAndCapture(any(), any(), any(), any(), anyString(), any());
         verify(attemptRepository).transition(any(), eq(
             com.softropic.skillars.platform.payment.repo.SessionPackPurchaseAttempt.Status.NO_CHARGE), any(), any());
