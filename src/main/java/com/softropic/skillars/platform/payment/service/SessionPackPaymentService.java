@@ -229,7 +229,7 @@ public class SessionPackPaymentService {
         String paymentIntentId;
         // skillars-deferred-178 (review round 2): checked before the card write too, so a request that resumes after the
         // resolver closed its attempt never writes, or reverts, a card (a later purchase of this parent may own it by now).
-        if (attemptRepository.existsByIdAndStatusNot(attempt.getId(), Status.IN_PROGRESS)) {
+        if (closedByTheResolver(attempt)) {
             throw closedBeforeCharge(attempt, parentId);
         }
         try {
@@ -246,7 +246,7 @@ public class SessionPackPaymentService {
         }
         // skillars-deferred-178 (RS06f): a thread that stalled past the absence age finds its attempt already closed by the
         // resolver (NO_CHARGE), and the parent may have started another purchase since: it must not charge now.
-        if (attemptRepository.existsByIdAndStatusNot(attempt.getId(), Status.IN_PROGRESS)) {
+        if (closedByTheResolver(attempt)) {
             // Review round 1: closed between the card write and here, so the resolver's own revert ran before this request
             // wrote the named card and reverted nothing.
             try {
@@ -695,6 +695,19 @@ public class SessionPackPaymentService {
      * recorded and paid for, but the parent, told nothing was charged, may have bought again: an alert source
      * (MoneyIntegrityEvent), so an operator checks for a second pack and offers a refund.
      */
+    /**
+     * The RS06f re-read. A failed read answers false (review round 5): the purchase goes on as it did before this check
+     * existed, instead of leaving the row IN_PROGRESS and the parent's one open-attempt slot held until the absence age.
+     */
+    private boolean closedByTheResolver(SessionPackPurchaseAttempt attempt) {
+        try {
+            return attemptRepository.existsByIdAndStatusNot(attempt.getId(), Status.IN_PROGRESS);
+        } catch (RuntimeException e) {
+            log.warn("[PACK_PURCHASE_ATTEMPT_RECHECK_FAILED] attemptId={} — going on without the re-check", attempt.getId(), e);
+            return false;
+        }
+    }
+
     private static PackNoChargeException closedBeforeCharge(SessionPackPurchaseAttempt attempt, Long parentId) {
         log.error("[PACK_PURCHASE_ATTEMPT_CLOSED_BEFORE_CHARGE] attemptId={} parentId={} — the resolver closed it while this "
             + "request stalled; not charged", attempt.getId(), parentId);
@@ -730,8 +743,8 @@ public class SessionPackPaymentService {
                 lateCapture(a.getId(), a.getParentId(), "unknown (charge outcome unknown)");
             }
         } catch (RuntimeException e) {
-            lateCapture(a.getId(), a.getParentId(), "unknown (charge outcome unknown; reopening failed)");
-            // Never replaces the charge's own exception, which the caller is about to rethrow.
+            // Never replaces the charge's own exception, which the caller is about to rethrow. Not the late-capture alert
+            // (review round 5): nothing here showed the attempt was judged uncharged; a DB outage is not a money mismatch.
             log.error("[PACK_PURCHASE_CAS_LOST] could not re-read the attempt after an unknown outcome: attemptId={}", a.getId(), e);
         }
     }

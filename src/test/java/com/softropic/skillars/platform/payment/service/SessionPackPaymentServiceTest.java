@@ -1081,6 +1081,17 @@ class SessionPackPaymentServiceTest {
             .anyMatch(e -> e.getFormattedMessage().startsWith("[PACK_PURCHASE_LATE_CAPTURE]"));
     }
 
+    /** Review round 5: a failed re-check never strands the attempt; the purchase goes on as before the check existed. */
+    @Test
+    void purchasePack_theReCheckFailing_goesOnWithTheCharge() {
+        stubPurchaseWithExistingCustomer(makeActiveTier(), "pm_old");
+        when(attemptRepository.existsByIdAndStatusNot(any(), any())).thenThrow(new org.springframework.dao.QueryTimeoutException("pool"));
+
+        sessionPackPaymentService.purchasePack(PARENT_ID, TIER_ID, PLAYER_ID, null, KEY);
+
+        verify(paymentGateway).chargeAndCapture(any(), any(), any(), any(), anyString(), any());
+    }
+
     /** Review round 3: a failing winner re-read never replaces the ownership refusal. */
     @Test
     void purchasePack_ownershipRefusedAndTheWinnerReReadFails_isStillTheRefusal() {
