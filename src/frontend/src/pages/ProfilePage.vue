@@ -128,7 +128,7 @@
                    must still be able to SEE their own profile. So every row below renders read-only
                    and only the edit buttons drop out — the earlier version replaced the whole section
                    with a bare note, which hid the coach's own data from them. -->
-              <div v-if="isCoachSuspended" class="profile-row">
+              <div v-if="isCoachSuspended" class="profile-row" data-testid="coach-suspended-note">
                 <div class="text-meta">{{ t('profile.coachSuspendedNote') }}</div>
                 <!-- FR-ADM-004: a suspension is an appealable enforcement action. -->
                 <AppealAction

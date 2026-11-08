@@ -921,12 +921,13 @@ export class Provisioner {
    * - UPCOMING: what the reminder job sets a day before; it is marked reminded so the job leaves it.
    * - COMPLETED_PENDING_CONFIRMATION: a Quick Complete with no live start (live_started_at stays NULL).
    * - COMPLETED: settled long enough ago to anchor the dispute window (`statusChangedDaysAgo`).
+   * - IN_PROGRESS: a session under way (what an admin cannot cancel).
    */
   async setBooking(
     bookingId: string,
     change: {
       startMinutesFromNow: number
-      status?: 'UPCOMING' | 'COMPLETED_PENDING_CONFIRMATION' | 'COMPLETED'
+      status?: 'UPCOMING' | 'IN_PROGRESS' | 'COMPLETED_PENDING_CONFIRMATION' | 'COMPLETED'
       statusChangedDaysAgo?: number
     },
   ): Promise<Date> {
@@ -2104,5 +2105,73 @@ export class Provisioner {
       [user.userId, daysAgo],
     )
     return row!.id
+  }
+
+  /**
+   * Send a message as `sender` through the API (moderated in the request, like the composer). Returns the
+   * message id, read from the raw text: a TSID loses precision through JSON.parse.
+   */
+  async sendMessage(
+    sender: Pick<Account, 'email' | 'password'>,
+    conversationId: string,
+    content: string,
+  ): Promise<string> {
+    const session = await this.login(sender)
+    try {
+      const sent = await session.api.post(`/messaging/conversations/${conversationId}/messages`, {
+        data: { content },
+        expectStatus: (status) => status >= 200 && status < 300,
+      })
+      const text = await sent.text()
+      const id = /"(?:messageId|id)"\s*:\s*"?(\d+)/.exec(text)?.[1]
+      if (!id) throw new Error(`No message id in ${text}`)
+      return id
+    } finally {
+      await session.dispose()
+    }
+  }
+
+  /** A parent's review of a coach through the API (moderated in the request). Returns its id. */
+  async submitReview(
+    parent: ParentAccount,
+    coach: CoachAccount,
+    rating: number,
+    body: string,
+  ): Promise<string> {
+    const session = await this.login(parent)
+    try {
+      await session.api.post(`/reviews/coaches/${coach.coachId}`, {
+        data: { rating, body },
+        expectStatus: (status) => status >= 200 && status < 300,
+      })
+    } finally {
+      await session.dispose()
+    }
+    const review = await this.reviewOf(coach, parent)
+    if (!review) throw new Error('The review was not stored')
+    return review.id
+  }
+
+  /** The booking's payment row status (payment.booking_payments): CAPTURED, REFUNDED_TO_CREDIT, … */
+  async bookingPaymentStatus(bookingId: string): Promise<string | undefined> {
+    const sql = await this.sql()
+    const [row] = await sql.query<{ status: string }>(
+      'SELECT status FROM payment.booking_payments WHERE booking_id = $1::uuid',
+      [bookingId],
+    )
+    return row?.status
+  }
+
+  /** The appeal on a subject (a strike, a dispute, a suspension…): id, status and the admin's note. */
+  async appealOn(
+    subjectId: string,
+  ): Promise<{ id: string; status: string; decisionNote: string | null } | undefined> {
+    const sql = await this.sql()
+    const [row] = await sql.query<{ id: string; status: string; decisionNote: string | null }>(
+      `SELECT id::text AS id, status, decision_note AS "decisionNote" FROM admin.appeals
+        WHERE subject_id = $1::uuid ORDER BY created_at DESC LIMIT 1`,
+      [subjectId],
+    )
+    return row
   }
 }

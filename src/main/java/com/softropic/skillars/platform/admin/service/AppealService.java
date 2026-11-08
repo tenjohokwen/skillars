@@ -75,6 +75,8 @@ public class AppealService {
     private final AdminReviewService adminReviewService;
     private final PessimisticLockRetryer lockRetryer;
     private final AdminActionLogRepository adminActionLogRepository;
+    private final AdminNotificationRecipientResolver recipientResolver;
+    private final org.springframework.context.ApplicationEventPublisher eventPublisher;
 
     private record EnforcedSubject(Long ownerUserId, Instant enforcedAt, boolean stillEnforced) {}
 
@@ -170,6 +172,11 @@ public class AppealService {
             reversalApplied = applied;
         }
         auditDecision(appealId, outcome, subjectType, subjectId, reversalApplied, note.trim(), adminId);
+        // Owner decision 2026-11-08 (ADM-09): the appellant is told the outcome and the note. Published in this
+        // transaction (the listener enqueues BEFORE_COMMIT), so a rolled-back decision sends nothing.
+        Long appellant = appealRepository.findById(appealId).map(Appeal::getAppellantUserId).orElse(null);
+        eventPublisher.publishEvent(new com.softropic.skillars.platform.admin.contract.AppealDecidedEvent(
+            appealId, outcome, subjectType, note.trim(), recipientResolver.forUser(appellant).orElse(null)));
         log.info("[APPEAL_DECIDED] appealId={} outcome={} subjectType={} subjectId={} adminId={}",
             appealId, outcome, subjectType, subjectId, adminId);
         return getDetail(appealId);

@@ -21,6 +21,8 @@ export class VideosScreen extends Screen {
     })
   status = (item: Locator) => this.within(item, 'video-status')
   play = (item: Locator) => this.within(item, 'video-play-btn')
+  /** Why a video is unavailable (blocked or archived), if it is. */
+  accessState = (item: Locator) => this.within(item, 'video-access-state')
   retry = (item: Locator) => this.within(item, 'video-retry-btn')
   delete = (item: Locator) => this.within(item, 'video-delete-btn')
   // The player's "From the coach" section.

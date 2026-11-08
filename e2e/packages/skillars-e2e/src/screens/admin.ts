@@ -29,6 +29,31 @@ export class AdminDrawer {
 abstract class AdminScreen extends Screen {
   notification = (message: string) =>
     this.page.locator('.q-notification').filter({ hasText: message })
+
+  /**
+   * Page forward through the list's paginator until `target` is on screen. The admin queues list oldest
+   * first, so on a long-lived stack a row a spec just created can sit several pages in.
+   */
+  async pageUntil(target: Locator, maxPages = 40, pagerId = 'admin-pagination'): Promise<void> {
+    const pager = this.page.getByTestId(pagerId)
+    // The list loads after the page: wait for the row itself, or for a paginator (only shown past one page).
+    await target
+      .first()
+      .or(pager)
+      .first()
+      .waitFor({ state: 'attached', timeout: 15_000 })
+      .catch(() => undefined)
+    for (let n = 2; n <= maxPages; n++) {
+      if ((await target.count()) > 0) return
+      const next = pager.getByRole('button', { name: String(n), exact: true })
+      if ((await next.count()) === 0) return
+      await next.click()
+      await target
+        .first()
+        .waitFor({ state: 'attached', timeout: 1_500 })
+        .catch(() => undefined)
+    }
+  }
   /** Absent from the DOM (not merely disabled): the S-28 boundary. */
   protected absent = (...ids: string[]): Locator =>
     this.page.locator(ids.map((id) => `[data-testid="${id}"]`).join(', '))
@@ -53,6 +78,10 @@ export class AdminCoachesScreen extends AdminScreen {
     return this
   }
   suspend = () => this.page.getByTestId('coach-suspend-open-btn')
+  actionDialog = () => this.page.getByTestId('coach-action-dialog')
+  actionReason = () => this.page.getByTestId('coach-action-reason-input')
+  cancelUpcoming = () => this.page.getByTestId('coach-cancel-upcoming-checkbox')
+  actionSubmit = () => this.page.getByTestId('coach-action-submit-btn')
   /** Every enforcement control the dialog can hold. */
   enforcementControls = () =>
     this.absent(
@@ -96,7 +125,15 @@ export class AdminDisputesScreen extends AdminScreen {
   readonly route = R.adminDisputes
   readonly readyTestId = 'admin-disputes-page'
   views = () => this.tid('dispute-row-view-btn')
+  view = (disputeId: string) =>
+    this.page.locator(`[data-testid="dispute-row-view-btn"][data-dispute-id="${disputeId}"]`)
   dialog = () => this.page.getByTestId('dispute-detail-dialog')
+  resolveOpen = () => this.page.getByTestId('dispute-resolve-open-btn')
+  resolveDialog = () => this.page.getByTestId('dispute-resolve-dialog')
+  resolution = () => this.page.getByTestId('dispute-resolution-select')
+  creditAmount = () => this.page.getByTestId('dispute-credit-amount-input')
+  resolutionNote = () => this.page.getByTestId('dispute-resolution-note-input')
+  resolveSubmit = () => this.page.getByTestId('dispute-resolve-submit-btn')
   content = () => this.page.getByTestId('dispute-detail-content')
   decisionControls = () => this.absent('dispute-resolve-open-btn', 'dispute-dismiss-open-btn')
 }
@@ -106,7 +143,12 @@ export class AdminAppealsScreen extends AdminScreen {
   readonly route = R.adminAppeals
   readonly readyTestId = 'admin-appeals-page'
   views = () => this.tid('appeal-row-view-btn')
+  view = (appealId: string) =>
+    this.page.locator(`[data-testid="appeal-row-view-btn"][data-appeal-id="${appealId}"]`)
   dialog = () => this.page.getByTestId('appeal-detail-dialog')
+  note = () => this.page.getByTestId('appeal-decision-note-input')
+  uphold = () => this.page.getByTestId('appeal-uphold-btn')
+  overturn = () => this.page.getByTestId('appeal-overturn-btn')
   content = () => this.page.getByTestId('appeal-detail-content')
   decisionControls = () =>
     this.absent('appeal-uphold-btn', 'appeal-overturn-btn', 'appeal-decision-note-input')
@@ -121,6 +163,10 @@ export class AdminVideosScreen extends AdminScreen {
   dialog = () => this.page.getByTestId('video-detail-dialog')
   content = () => this.page.getByTestId('video-detail-content')
   block = () => this.page.getByTestId('video-block-btn')
+  restore = () => this.page.getByTestId('video-restore-btn')
+  archivedHint = () => this.page.getByTestId('video-archived-hint')
+  actionDialog = () => this.page.getByTestId('video-action-dialog')
+  actionSubmit = () => this.page.getByTestId('video-action-submit-btn')
   accessControls = () =>
     this.absent('video-block-btn', 'video-restore-btn', 'video-reconcile-btn', 'video-delete-btn')
 
@@ -138,6 +184,13 @@ export class AdminBookingsScreen extends AdminScreen {
   lookup = () => this.tid('booking-lookup-btn')
   result = () => this.tid('booking-lookup-result')
   moneyControls = () => this.absent('booking-force-complete-open-btn', 'booking-cancel-open-btn')
+  forceComplete = () => this.tid('booking-force-complete-open-btn')
+  notStuck = () => this.tid('booking-not-stuck-hint')
+  cancel = () => this.tid('booking-cancel-open-btn')
+  liveHint = () => this.tid('booking-live-session-hint')
+  confirmDialog = () => this.page.getByTestId('booking-confirm-dialog')
+  note = () => this.page.getByTestId('booking-note-input')
+  forceCompleteSubmit = () => this.page.getByTestId('booking-force-complete-submit-btn')
 
   async find(bookingId: string): Promise<void> {
     await this.idInput().fill(bookingId)
@@ -189,4 +242,45 @@ export class AdminConfigScreen extends AdminScreen {
   dialog = () => this.page.getByTestId('config-edit-dialog')
   value = () => this.page.getByTestId('config-value-input')
   save = () => this.page.getByTestId('config-save-btn')
+}
+
+/** /admin/moderation: the alert queue (oldest first) and the review-moderation tab. */
+export class AdminModerationScreen extends AdminScreen {
+  readonly route = R.adminModeration
+  readonly readyTestId = 'admin-moderation-page'
+  /** The queue row for a held message, by the message id it refers to. */
+  messageAlert = (messageId: string) =>
+    this.page.locator(`[data-testid="alert-open-message-btn"][data-reference-id="${messageId}"]`)
+  messageDialog = () => this.page.getByTestId('message-dialog')
+  messageContent = () => this.page.getByTestId('message-detail-content')
+  approve = () => this.page.getByTestId('message-approve-btn')
+  blockOpen = () => this.page.getByTestId('message-block-open-btn')
+  blockReason = () => this.page.getByTestId('message-block-reason-input')
+  blockSubmit = () => this.page.getByTestId('message-block-submit-btn')
+  reviewsTab = () => this.tid('tab-reviews')
+  review = (reviewId: string) =>
+    this.page.locator(`[data-testid="review-row-view-btn"][data-review-id="${reviewId}"]`)
+  reviewDialog = () => this.page.getByTestId('review-detail-dialog')
+  reviewApprove = () => this.page.getByTestId('review-approve-btn')
+  reviewBlockOpen = () => this.page.getByTestId('review-block-open-btn')
+  reviewBlockReason = () => this.page.getByTestId('review-block-reason-input')
+  reviewBlockSubmit = () => this.page.getByTestId('review-block-submit-btn')
+}
+
+/** /admin/finance (full admins only). */
+export class AdminFinanceScreen extends AdminScreen {
+  readonly route = R.adminFinance
+  readonly readyTestId = 'admin-finance-page'
+  from = () => this.tid('finance-from-input')
+  to = () => this.tid('finance-to-input')
+  apply = () => this.tid('finance-apply-btn')
+  overview = () => this.tid('finance-overview')
+  metrics = () => this.page.locator('[data-testid^="finance-metric-"]')
+  coachId = () => this.tid('finance-coach-id-input')
+  coachLookup = () => this.tid('finance-coach-id-btn')
+  coachDialog = () => this.page.getByTestId('finance-coach-dialog')
+  coachRevenue = () => this.page.getByTestId('finance-coach-revenue')
+  releaseHeld = () => this.page.getByTestId('finance-release-held-btn')
+  releaseDialog = () => this.page.getByTestId('finance-release-held-dialog')
+  releaseSubmit = () => this.page.getByTestId('finance-release-held-submit-btn')
 }

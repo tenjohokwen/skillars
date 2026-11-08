@@ -88,6 +88,6 @@ class EmailListenerAnnotationCoverageTest {
             .isEqualTo(3);
         assertThat(candidateHandlers(AdminOutcomeEmailListener.class).count())
             .as("AdminOutcomeEmailListener's on*(Event) handlers")
-            .isEqualTo(8); // feat/payment-forfeit-payouts-and-clawback: + onDisputeCoachUpheld
+            .isEqualTo(9); // feat/payment-forfeit-payouts-and-clawback: + onDisputeCoachUpheld; ADM-09: + onAppealDecided
     }
 }

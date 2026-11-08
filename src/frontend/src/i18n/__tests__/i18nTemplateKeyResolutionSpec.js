@@ -78,15 +78,15 @@ const DYNAMIC_KEY_CALL_SITES = [
     reason: 'table cell keyed by props.row.status, a runtime enum value from the dispute queue',
   },
   {
-    at: 'src/pages/admin/AdminDisputesPage.vue:81',
+    at: 'src/pages/admin/AdminDisputesPage.vue:87',
     reason: 'label keyed by detail.reason, a runtime enum value from GET /api/admin/disputes/{id}',
   },
   {
-    at: 'src/pages/admin/AdminDisputesPage.vue:84',
+    at: 'src/pages/admin/AdminDisputesPage.vue:90',
     reason: 'label keyed by detail.status, a runtime enum value from GET /api/admin/disputes/{id}',
   },
   {
-    at: 'src/pages/admin/AdminDisputesPage.vue:95',
+    at: 'src/pages/admin/AdminDisputesPage.vue:101',
     reason:
       'label keyed by detail.resolution, a runtime enum value from GET /api/admin/disputes/{id}',
   },
@@ -312,15 +312,15 @@ const DYNAMIC_KEY_CALL_SITES = [
     reason: 'queue cell keyed by the AppealStatus enum',
   },
   {
-    at: 'src/pages/admin/AdminAppealsPage.vue:97',
+    at: 'src/pages/admin/AdminAppealsPage.vue:103',
     reason: 'detail line keyed by the AppealSubjectType enum',
   },
   {
-    at: 'src/pages/admin/AdminAppealsPage.vue:106',
+    at: 'src/pages/admin/AdminAppealsPage.vue:112',
     reason: 'detail line keyed by the AppealStatus enum',
   },
   {
-    at: 'src/pages/admin/AdminAppealsPage.vue:335',
+    at: 'src/pages/admin/AdminAppealsPage.vue:341',
     reason:
       'subject-summary field label: te()-guarded admin.appeals.subjectField.<backend map key>, raw key fallback',
   },

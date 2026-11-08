@@ -54,6 +54,8 @@ class AppealServiceTest {
     @Mock com.softropic.skillars.infrastructure.persistence.PessimisticLockRetryer lockRetryer;
 
     @Mock com.softropic.skillars.platform.admin.repo.AdminActionLogRepository adminActionLogRepository;
+    @Mock AdminNotificationRecipientResolver recipientResolver;
+    @Mock org.springframework.context.ApplicationEventPublisher eventPublisher;
     @InjectMocks AppealService service;
 
     @Test
@@ -178,6 +180,28 @@ class AppealServiceTest {
             .isEqualTo(com.softropic.skillars.platform.admin.contract.AdminActionType.APPEAL_UPHOLD);
         assertThat(logged.getValue().getReferenceId()).isEqualTo(appealId.toString());
         assertThat(logged.getValue().getAdminId()).isEqualTo(ADMIN);
+    }
+
+    /** Owner decision 2026-11-08 (ADM-09): the appellant is told the outcome and the note. */
+    @Test
+    void decide_tellsTheAppellantTheOutcomeAndTheNote() {
+        UUID appealId = UUID.randomUUID();
+        Appeal appeal = appeal(appealId, AppealSubjectType.REVIEW_BLOCK, UUID.randomUUID(), Instant.now());
+        when(appealRepository.findById(appealId)).thenReturn(Optional.of(appeal));
+        when(appealRepository.decideIfOpen(eq(appealId), eq(AppealStatus.UPHELD), anyString(), anyLong(), any()))
+            .thenReturn(1);
+        var recipient = new com.softropic.skillars.platform.admin.contract.AdminNotificationRecipient("a@x.test", "fr");
+        when(recipientResolver.forUser(appeal.getAppellantUserId())).thenReturn(Optional.of(recipient));
+
+        service.decide(appealId, AppealStatus.UPHELD, "  The strike stands.  ", ADMIN);
+
+        var event = org.mockito.ArgumentCaptor.forClass(
+            com.softropic.skillars.platform.admin.contract.AppealDecidedEvent.class);
+        verify(eventPublisher).publishEvent(event.capture());
+        assertThat(event.getValue().outcome()).isEqualTo(AppealStatus.UPHELD);
+        assertThat(event.getValue().subjectType()).isEqualTo(AppealSubjectType.REVIEW_BLOCK);
+        assertThat(event.getValue().decisionNote()).isEqualTo("The strike stands.");
+        assertThat(event.getValue().recipient()).isEqualTo(recipient);
     }
 
     @Test

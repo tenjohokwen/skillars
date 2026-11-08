@@ -154,7 +154,11 @@ public enum EmailTemplate {
     /** The author's review was approved and is now public. */
     REVIEW_APPROVED("email.admin.review_approved.title"),
     /** The author's review was blocked by a moderator. */
-    REVIEW_BLOCKED("email.admin.review_blocked.title");
+    REVIEW_BLOCKED("email.admin.review_blocked.title"),
+    /** Owner decision 2026-11-08 (ADM-09): the appellant's appeal was rejected; carries the admin's note. */
+    APPEAL_UPHELD("email.admin.appeal_upheld.title"),
+    /** Owner decision 2026-11-08 (ADM-09): the appellant's appeal succeeded; carries the admin's note. */
+    APPEAL_OVERTURNED("email.admin.appeal_overturned.title");
 
     private final String subjectKey;
     private final Duration deliveryDeadline;

@@ -160,6 +160,24 @@ class AdminOutcomeEmailListenerTest {
         assertThat(sent(EmailTemplate.REVIEW_BLOCKED)).containsEntry("coachDisplayName", "Coach Kim");
     }
 
+    /** Owner decision 2026-11-08 (ADM-09). */
+    @Test
+    void appealDecided_mapsTheOutcomeToItsTemplate_withTheNoteAndThePage() {
+        var recipient = new com.softropic.skillars.platform.admin.contract.AdminNotificationRecipient("to@x.test", "de");
+        listener.onAppealDecided(new com.softropic.skillars.platform.admin.contract.AppealDecidedEvent(UUID.randomUUID(),
+            com.softropic.skillars.platform.admin.contract.AppealStatus.OVERTURNED,
+            com.softropic.skillars.platform.admin.contract.AppealSubjectType.RELIABILITY_STRIKE, "Reversed.", recipient));
+        assertThat(sent(EmailTemplate.APPEAL_OVERTURNED))
+            .containsEntry("decisionNote", "Reversed.")
+            .containsEntry("appealSubject", "RELIABILITY_STRIKE")
+            .containsEntry("pageUrl", "https://app.test/#/coach/reliability");
+
+        listener.onAppealDecided(new com.softropic.skillars.platform.admin.contract.AppealDecidedEvent(UUID.randomUUID(),
+            com.softropic.skillars.platform.admin.contract.AppealStatus.UPHELD,
+            com.softropic.skillars.platform.admin.contract.AppealSubjectType.COACH_SUSPENSION, "Stands.", recipient));
+        assertThat(sent(EmailTemplate.APPEAL_UPHELD)).containsEntry("pageUrl", "https://app.test/#/profile");
+    }
+
     @Test
     void noReachableRecipient_sendsNothing() {
         listener.onCoachReinstated(new CoachReinstatedEvent(this, UUID.randomUUID(), 1L));

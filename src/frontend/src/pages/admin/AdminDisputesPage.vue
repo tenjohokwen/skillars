@@ -49,7 +49,12 @@
       </q-table>
 
       <div v-if="totalPages > 1" class="q-mt-md flex flex-center">
-        <q-pagination v-model="currentPage" :max="totalPages" @update:model-value="loadPage" />
+        <q-pagination
+          v-model="currentPage"
+          :max="totalPages"
+          data-testid="admin-pagination"
+          @update:model-value="loadPage"
+        />
       </div>
     </div>
 

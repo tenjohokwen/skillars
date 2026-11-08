@@ -42,7 +42,12 @@
     </q-table>
 
     <div v-if="totalPages > 1" class="q-mt-md flex flex-center">
-      <q-pagination v-model="currentPage" :max="totalPages" @update:model-value="loadPage" />
+      <q-pagination
+        v-model="currentPage"
+        :max="totalPages"
+        data-testid="review-pagination"
+        @update:model-value="loadPage"
+      />
     </div>
 
     <!-- Review detail -->

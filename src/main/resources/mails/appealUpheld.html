@@ -1,0 +1,20 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org">
+<head>
+    <meta charset="UTF-8">
+    <title th:text="#{email.admin.appeal_upheld.title}">Your Appeal Was Not Upheld</title>
+</head>
+<body>
+    <h2 th:text="#{email.admin.appeal_upheld.title}">Your Appeal Was Not Upheld</h2>
+    <p>A Skillars administrator reviewed your appeal and decided to keep the original decision.</p>
+    <p th:switch="${map.appealSubject}">Your appeal was about
+        <span th:case="'RELIABILITY_STRIKE'">a reliability strike</span>
+        <span th:case="'COACH_SUSPENSION'">the suspension of your coach profile</span>
+        <span th:case="'REVIEW_BLOCK'">a review that was blocked</span>
+        <span th:case="'DISPUTE_RESOLUTION'">the resolution of a dispute</span>
+        <span th:case="*">an earlier decision</span>.
+    </p>
+    <p>The administrator's note: <em th:text="${map.decisionNote}">note</em></p>
+    <p>You can see the details here: <a th:href="${map.pageUrl}" th:text="${map.pageUrl}">Skillars</a></p>
+</body>
+</html>

@@ -42,6 +42,9 @@ class AdminOutcomeEmailRenderingTest {
     private static Map<String, Object> data() {
         Map<String, Object> data = new HashMap<>();
         data.put("coachDisplayName", "Coach Kim");
+        data.put("appealSubject", "RELIABILITY_STRIKE");
+        data.put("decisionNote", "The family confirmed it.");
+        data.put("pageUrl", "https://app.test/#/coach/reliability");
         data.put("reason", "Reason <b>text</b>");
         data.put("disputeReason", "SESSION_QUALITY");
         data.put("resolution", "PARTIAL_CREDIT");
@@ -65,7 +68,8 @@ class AdminOutcomeEmailRenderingTest {
 
     @ParameterizedTest
     @EnumSource(value = EmailTemplate.class, names = {"COACH_SUSPENDED", "COACH_REINSTATED", "COACH_WARNING_ISSUED",
-        "DISPUTE_RESOLVED", "DISPUTE_DISMISSED", "DISPUTE_COACH_UPHELD", "GDPR_EXPORT_READY", "REVIEW_APPROVED", "REVIEW_BLOCKED"})
+        "DISPUTE_RESOLVED", "DISPUTE_DISMISSED", "DISPUTE_COACH_UPHELD", "GDPR_EXPORT_READY", "REVIEW_APPROVED", "REVIEW_BLOCKED",
+        "APPEAL_UPHELD", "APPEAL_OVERTURNED"})
     void rendersInEveryBundledLocale(EmailTemplate template) {
         String english = null;
         for (String lang : List.of("en", "de", "fr")) {
