@@ -1,6 +1,6 @@
 # Story skillars-deferred-180: Pre-launch hardening (JWT chain check fails closed; Idempotency-Key required; refresh rate-limited)
 
-Status: in-progress
+Status: review
 
 <!-- CREATED 2026-11-08 from the owner's decisions on the deferred list (one-by-one session, 2026-11-08):
      decision 1 (A), 4 (A), 5 (A), 6 (A), 7 (A), 8 (B). Code read at origin/master f0fe8e7d. -->
@@ -96,6 +96,8 @@ Claude Opus 5.5 (claude-opus-5-5)
 
 ### Change Log
 
+- 2026-11-08: /pr-review round 4: security clean; the general finding (missing key answers generic.requestError) refuted:
+  that key has no bundle entry, so errorMsg.message carries payment.idempotencyKeyRequired; pinned by a body assertion.
 - 2026-11-08: /pr-review round 3 (both arms, low): a 20-token bucket is a 20-request burst against a 25-connection
   pool, and a per-IP bucket can be drained by anyone on the NAT. Capacity lowered to 5; the drain ledgered as latent
   with the MAX_GRACE_HOPS trigger (nothing rotates today).
