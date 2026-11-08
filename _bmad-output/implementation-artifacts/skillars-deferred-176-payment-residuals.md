@@ -1,6 +1,6 @@
 # Story skillars-deferred-176: Payment residuals (Stripe email serialisation, card writes on erased rows, unreconciled no-charge, upgrade retry, file ownership)
 
-Status: in-progress
+Status: review
 
 <!-- CREATED 2026-11-07 from deferred-work.md (RS section), owner-chosen bundle "payment residuals": RS03d, RS03e,
      RS03f, RS06i, RS07c, RS09g, RS09h. Code read at origin/master 0df391d5 (skillars-deferred-175 merged, PR #489);
@@ -357,3 +357,4 @@ Claude Opus 5.5 (claude-opus-5-5)
 - 2026-11-08: `/pr-review` round 4 (c9ffc23d): V1 a Stripe customer created while its account was erased (the email read after the row is saved is the erasure tombstone) now schedules the Stripe erasure instead of an email sync, since the erasure found no customer row to scrub. V2 (an open ungranted-upgrade row whose charge a later granted upgrade used stays open) not auto-closed: a correct rule needs a price-change history the schema lacks; owner chose a monitoring.md runbook check and ledger RS09j.
 - 2026-11-08: `/pr-review` round 5 (bb484796): V1 `PaymentMethodSyncOutboxHandler` loaded the `StripeCustomer` entity for the lock key, so the superseded-card check after the lock read that cached copy and an older card's sync could win over a newer one; the key now comes from `StripeCustomerRepository.findStripeCustomerIdByParentId` (scalar, nothing cached), shown by two `StripeCustomerRepositoryIT` tests.
 - 2026-11-08: `/pr-review` round 6 (e8be76da): V1 `savePaymentMethodAndScheduleSync` (`POST /save-payment-method`) now writes through `StripeCustomerCardWrites.writeCardIfPayerLive` and enqueues no sync for an erased payer, closing the AC3 path it missed. V2 the post-creation check reads the email `FOR SHARE` (`UserRepository.findEmailByIdForShare`), so a first Stripe customer created while an erasure is still open gets its Stripe erasure scheduled. Two `StripeCustomerRepositoryIT` race tests.
+- 2026-11-08: `/pr-review` round 7 (9c1c3fac): security clean; two low findings on requests overlapping the payer's own erasure, owner accepted: RS03h (a purchase or card setup still completes) and RS03i (a failed late Stripe-erasure schedule is only logged; manual step in monitoring.md). Status -> review; PR opened.
