@@ -255,7 +255,7 @@ class SessionPackPaymentServiceTest {
         org.mockito.InOrder order = org.mockito.Mockito.inOrder(stripeCustomerEmailSync, paymentGateway, stripeCustomerRepository);
         order.verify(stripeCustomerEmailSync).currentEmail(PARENT_ID);
         order.verify(paymentGateway).createStripeCustomer(PARENT_ID);
-        order.verify(stripeCustomerRepository).save(any());
+        order.verify(stripeCustomerRepository).insertIfAbsent(eq(PARENT_ID), eq("cus_test"), any());
         order.verify(stripeCustomerEmailSync).syncIfEmailChangedSince(PARENT_ID, "before@example.com");
     }
 
@@ -310,7 +310,7 @@ class SessionPackPaymentServiceTest {
         when(sessionPackTierRepository.findById(TIER_ID)).thenReturn(Optional.of(tier));
         when(stripeCustomerRepository.findById(selfPlayerUserId)).thenReturn(Optional.empty());
         when(paymentGateway.createStripeCustomer(selfPlayerUserId)).thenReturn("cus_test");
-        when(stripeCustomerRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(stripeCustomerRepository.insertIfAbsent(any(), any(), any())).thenReturn(1);
         when(paymentGateway.chargeAndCapture(eq(TIER_ID), eq(selfPlayerUserId), eq(COACH_ID), eq(tier.getTotalPrice()), anyString(), any()))
             .thenReturn("pi_test");
         when(sessionPackPurchaseRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
@@ -347,7 +347,7 @@ class SessionPackPaymentServiceTest {
         when(sessionPackTierRepository.findById(TIER_ID)).thenReturn(Optional.of(tier));
         // skillars-deferred-174 AC1: a named card needs the payer's own Stripe customer, so the happy path has one.
         when(stripeCustomerRepository.findById(PARENT_ID)).thenAnswer(inv -> Optional.of(existingCustomerWithCard(null)));
-        lenient().when(stripeCustomerRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        lenient().when(stripeCustomerRepository.insertIfAbsent(any(), any(), any())).thenReturn(1);
         when(paymentGateway.chargeAndCapture(eq(TIER_ID), eq(PARENT_ID), eq(COACH_ID), eq(tier.getTotalPrice()), anyString(), any()))
             .thenReturn("pi_test");
     }
@@ -814,10 +814,11 @@ class SessionPackPaymentServiceTest {
         when(sessionPackTierRepository.findById(TIER_ID)).thenReturn(Optional.of(makeActiveTier()));
         when(stripeCustomerRepository.findById(PARENT_ID)).thenReturn(Optional.empty());
         when(paymentGateway.createStripeCustomer(PARENT_ID)).thenReturn("cus_loser");
-        when(stripeCustomerRepository.save(any())).thenThrow(new org.springframework.dao.DataIntegrityViolationException("dup"));
+        when(stripeCustomerRepository.insertIfAbsent(PARENT_ID, "cus_loser", null)).thenReturn(0); // a concurrent row won
 
         assertThatThrownBy(() -> sessionPackPaymentService.purchasePack(PARENT_ID, TIER_ID, PLAYER_ID, null, KEY))
-            .isInstanceOf(org.springframework.dao.DataIntegrityViolationException.class);
+            .isInstanceOf(com.softropic.skillars.platform.payment.contract.exception.PackNoChargeException.class);
+        verify(stripeCustomerRepository, never()).save(any()); // never merges over the winner's row (review round 4)
 
         verify(stripeCustomerErasureOutboxSupport).scheduleOrphanErasure("cus_loser");
         verify(paymentGateway, never()).chargeAndCapture(any(), any(), any(), any(), anyString(), any());
@@ -831,7 +832,7 @@ class SessionPackPaymentServiceTest {
         when(playerProfileRepository.findById(PLAYER_ID)).thenReturn(Optional.of(player));
         when(sessionPackTierRepository.findById(TIER_ID)).thenReturn(Optional.of(makeActiveTier()));
         when(stripeCustomerRepository.findById(PARENT_ID)).thenReturn(Optional.empty());
-        when(stripeCustomerRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(stripeCustomerRepository.insertIfAbsent(any(), any(), any())).thenReturn(1);
         when(paymentGateway.createStripeCustomer(PARENT_ID)).thenReturn("cus_test");
         when(stripeCustomerEmailSync.currentEmail(PARENT_ID)).thenReturn("before@example.com");
         when(stripeCustomerEmailSync.syncIfEmailChangedSince(PARENT_ID, "before@example.com")).thenReturn(true);

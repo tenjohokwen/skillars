@@ -388,6 +388,24 @@ class StripeCustomerRepositoryIT extends AbstractIntegrationTest {
         }
     }
 
+    /** Review round 4: a second first-creation never overwrites the row a concurrent request committed (save() merges). */
+    @Test
+    void insertIfAbsent_keepsTheFirstRow_andReportsTheLoser() {
+        try {
+            int first = stripeCustomerRepository.insertIfAbsent(PAYER, "cus_first_177", null);
+            int second = stripeCustomerRepository.insertIfAbsent(PAYER, "cus_second_177", "pm_x");
+
+            org.assertj.core.api.Assertions.assertThat(first).isEqualTo(1);
+            org.assertj.core.api.Assertions.assertThat(second).isZero();
+            StripeCustomer row = stripeCustomerRepository.findById(PAYER).orElseThrow();
+            org.assertj.core.api.Assertions.assertThat(row.getStripeCustomerId()).isEqualTo("cus_first_177");
+            org.assertj.core.api.Assertions.assertThat(row.getStripePaymentMethodId()).isNull();
+            org.assertj.core.api.Assertions.assertThat(row.getCreatedAt()).isNotNull();
+        } finally {
+            removePayer();
+        }
+    }
+
     @Test
     void theSweep_leavesALivePayerAlone() {
         insertErasableUser();

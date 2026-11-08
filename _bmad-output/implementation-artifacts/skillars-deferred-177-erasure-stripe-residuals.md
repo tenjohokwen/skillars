@@ -122,3 +122,7 @@ Claude Opus 5.5 (claude-opus-5-5)
   the key and replays it for 24 hours, so one Stripe error would block the payer's first customer for a day; security
   reviewer: a concurrent same-key request gets 409). Instead the request that loses the race enqueues the Stripe erasure of
   the customer it created (`StripeCustomerErasureOutboxSupport.scheduleOrphanErasure`), on both creation paths.
+- 2026-11-08: `/pr-review` round 4 (010756fa): a first Stripe customer row is now written insert-only
+  (`StripeCustomerRepository.insertIfAbsent`, `ON CONFLICT DO NOTHING`): `save()` merges on this assigned-id entity, so a
+  second first-creation request that ran after the first committed overwrote that row and orphaned its customer (both
+  reviewers, medium). The post-creation check fails closed when its `FOR SHARE` read fails (security reviewer).

@@ -90,11 +90,13 @@ class StripeCustomerEmailSyncOutboxSupportTest {
         org.assertj.core.api.Assertions.assertThat(support().syncIfEmailChangedSince(7L, "before@example.com")).isTrue();
     }
 
+    /** Review round 4: fail closed; the read waits on an in-flight erasure, so its failure is most likely one. */
     @Test
-    void afterCustomerCreation_aFailedRead_reportsNotErased() {
-        when(userRepository.findEmailByIdForShare(7L)).thenThrow(new IllegalStateException("db down"));
+    void afterCustomerCreation_aFailedRead_throws_soTheCallerDoesNotGoOnUnchecked() {
+        when(userRepository.findEmailByIdForShare(7L)).thenThrow(new IllegalStateException("lock timeout"));
 
-        org.assertj.core.api.Assertions.assertThat(support().syncIfEmailChangedSince(7L, "before@example.com")).isFalse();
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> support().syncIfEmailChangedSince(7L, "before@example.com"))
+            .hasMessage("lock timeout");
     }
 
     @Test

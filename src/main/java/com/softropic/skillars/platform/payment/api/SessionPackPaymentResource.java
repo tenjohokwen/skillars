@@ -188,16 +188,15 @@ public class SessionPackPaymentResource {
                 StripeCustomer sc = new StripeCustomer();
                 sc.setParentId(parentId);
                 sc.setStripeCustomerId(stripeCustomerId);
-                StripeCustomer saved;
-                try {
-                    saved = stripeCustomerRepository.save(sc);
-                } catch (DataIntegrityViolationException e) {
+                // Insert-only (177 review round 4): save() merges and would overwrite a row a concurrent request committed.
+                if (stripeCustomerRepository.insertIfAbsent(parentId, stripeCustomerId, null) == 0) {
                     // A concurrent first request saved the row; it is an existing customer now (177 review round 1), and the
                     // customer this request created is named by no row, so it is erased at Stripe (review round 3).
                     sessionPackPaymentService.discardUnrecordedCustomer(stripeCustomerId);
                     sessionPackPaymentService.requirePayerLive(parentId);
                     return stripeCustomerRepository.findById(parentId).orElseThrow();
                 }
+                StripeCustomer saved = sc;
                 // skillars-deferred-176 AC2: an email change that committed while the customer was created enqueued no sync.
                 if (stripeCustomerEmailSync.syncIfEmailChangedSince(parentId, emailBefore)) {
                     throw SessionPackPaymentService.erasedPayer(parentId);

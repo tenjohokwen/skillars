@@ -105,6 +105,18 @@ public interface StripeCustomerRepository extends JpaRepository<StripeCustomer, 
     int clearPaymentMethod(@Param("parentId") Long parentId);
 
     /**
+     * skillars-deferred-177 (review round 4): a payer's first {@code stripe_customers} row, insert-only. {@code save()} on this
+     * entity (assigned id, no version) merges, so a second first-creation request that ran after the first committed would
+     * overwrite that row and orphan its Stripe customer. Returns 0 when a concurrent request's row is already there.
+     */
+    @Modifying
+    @Transactional
+    @Query(value = "INSERT INTO payment.stripe_customers (parent_id, stripe_customer_id, stripe_payment_method_id, created_at) "
+        + "VALUES (:parentId, :stripeCustomerId, :paymentMethodId, now()) ON CONFLICT (parent_id) DO NOTHING", nativeQuery = true)
+    int insertIfAbsent(@Param("parentId") Long parentId, @Param("stripeCustomerId") String stripeCustomerId,
+                       @Param("paymentMethodId") String paymentMethodId);
+
+    /**
      * skillars-deferred-177 (RS03i): records that the Stripe-side erasure of this row is enqueued, in the transaction that
      * enqueues it, so {@code StripeCustomerErasureSweep} leaves it alone. Same flush rules as {@link #clearPaymentMethod}.
      */

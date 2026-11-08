@@ -270,8 +270,7 @@ class SessionPackPaymentResourceWebMvcTest {
         when(securityUtil.getCurrentCoachUserId()).thenReturn(PARENT_USER_ID);
         when(stripeCustomerRepository.findById(PARENT_USER_ID)).thenReturn(Optional.empty());
         when(paymentGateway.createStripeCustomer(PARENT_USER_ID)).thenReturn("cus_loser");
-        when(stripeCustomerRepository.save(org.mockito.ArgumentMatchers.any()))
-            .thenThrow(new org.springframework.dao.DataIntegrityViolationException("duplicate key"));
+        when(stripeCustomerRepository.insertIfAbsent(PARENT_USER_ID, "cus_loser", null)).thenReturn(0); // a concurrent row won
         org.mockito.Mockito.doThrow(new com.softropic.skillars.platform.payment.contract.exception.PaymentGatewayException(
             "payment.accountErased")).when(sessionPackPaymentService).requirePayerLive(PARENT_USER_ID);
 
@@ -290,7 +289,7 @@ class SessionPackPaymentResourceWebMvcTest {
         when(stripeCustomerRepository.findById(PARENT_USER_ID)).thenReturn(Optional.empty());
         when(stripeCustomerEmailSync.currentEmail(PARENT_USER_ID)).thenReturn("before@example.com");
         when(paymentGateway.createStripeCustomer(PARENT_USER_ID)).thenReturn("cus_new");
-        when(stripeCustomerRepository.save(org.mockito.ArgumentMatchers.any())).thenAnswer(inv -> inv.getArgument(0));
+        when(stripeCustomerRepository.insertIfAbsent(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any())).thenReturn(1);
         when(stripeCustomerEmailSync.syncIfEmailChangedSince(PARENT_USER_ID, "before@example.com")).thenReturn(true);
 
         mockMvc.perform(post("/api/payment/setup-intent").contentType(MediaType.APPLICATION_JSON))
@@ -307,7 +306,7 @@ class SessionPackPaymentResourceWebMvcTest {
         when(stripeCustomerRepository.findById(PARENT_USER_ID)).thenReturn(Optional.empty());
         when(stripeCustomerEmailSync.currentEmail(PARENT_USER_ID)).thenReturn("before@example.com");
         when(paymentGateway.createStripeCustomer(PARENT_USER_ID)).thenReturn("cus_new");
-        when(stripeCustomerRepository.save(org.mockito.ArgumentMatchers.any())).thenAnswer(inv -> inv.getArgument(0));
+        when(stripeCustomerRepository.insertIfAbsent(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any())).thenReturn(1);
         when(paymentGateway.createSetupIntent("cus_new")).thenReturn("seti_new");
 
         mockMvc.perform(post("/api/payment/setup-intent").contentType(MediaType.APPLICATION_JSON))
@@ -316,7 +315,7 @@ class SessionPackPaymentResourceWebMvcTest {
         org.mockito.InOrder order = org.mockito.Mockito.inOrder(stripeCustomerEmailSync, paymentGateway, stripeCustomerRepository);
         order.verify(stripeCustomerEmailSync).currentEmail(PARENT_USER_ID);
         order.verify(paymentGateway).createStripeCustomer(PARENT_USER_ID);
-        order.verify(stripeCustomerRepository).save(org.mockito.ArgumentMatchers.any());
+        order.verify(stripeCustomerRepository).insertIfAbsent(PARENT_USER_ID, "cus_new", null);
         order.verify(stripeCustomerEmailSync).syncIfEmailChangedSince(PARENT_USER_ID, "before@example.com");
     }
 

@@ -1069,13 +1069,13 @@ public class SessionPackPaymentService {
             sc.setParentId(parentId);
             sc.setStripeCustomerId(stripeCustomerId);
             sc.setStripePaymentMethodId(paymentMethodId);
-            final StripeCustomer saved;
-            try {
-                saved = stripeCustomerRepository.save(sc);
-            } catch (DataIntegrityViolationException e) {
-                discardUnrecordedCustomer(stripeCustomerId); // skillars-deferred-177 review round 3
-                throw e;
+            // skillars-deferred-177 review rounds 3-4: insert-only; a concurrent first request's row wins, and the customer this
+            // request created, named by no row, is erased at Stripe. Nothing is charged; a retry finds the winner's customer.
+            if (stripeCustomerRepository.insertIfAbsent(parentId, stripeCustomerId, sc.getStripePaymentMethodId()) == 0) {
+                discardUnrecordedCustomer(stripeCustomerId);
+                throw new PaymentGatewayException("payment.customerCreationFailed");
             }
+            StripeCustomer saved = sc;
             // skillars-deferred-176 AC2: an email change that committed while the customer was created enqueued no sync.
             if (stripeCustomerEmailSync.syncIfEmailChangedSince(parentId, emailBefore)) {
                 throw erasedPayer(parentId); // skillars-deferred-177 (RS03h); its Stripe erasure is already scheduled
