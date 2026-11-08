@@ -151,7 +151,7 @@ const DYNAMIC_KEY_CALL_SITES = [
     reason: "status label keyed by a lookup-table entry's own key field",
   },
   {
-    at: 'src/components/development/SluNarrativeSummary.vue:4',
+    at: 'src/components/development/SluNarrativeSummary.vue:13',
     reason: "$t on a narrative item's own server-supplied key + params",
   },
   {
@@ -262,7 +262,7 @@ const DYNAMIC_KEY_CALL_SITES = [
     reason: "label keyed by the review-eligibility response's own reasonCode enum",
   },
   {
-    at: 'src/pages/parent/ParentDevelopmentPortalPage.vue:99',
+    at: 'src/pages/parent/ParentDevelopmentPortalPage.vue:104',
     reason: '$t on noContributionsKey, the Parent-portal twin of the Coach-side computed above',
   },
   {

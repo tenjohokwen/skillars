@@ -4,12 +4,17 @@
 
     <div class="text-h5 q-mb-md">{{ $t('development.portal.title') }}</div>
 
-    <q-banner v-if="pageError" class="bg-negative text-white q-mb-md" rounded>
+    <q-banner
+      v-if="pageError"
+      class="bg-negative text-white q-mb-md"
+      rounded
+      data-testid="development-error"
+    >
       {{ pageError }}
     </q-banner>
 
     <!-- Skills Radar — hero (above all content per AC1) -->
-    <q-card id="dev-section-radar" class="q-mb-md">
+    <q-card id="dev-section-radar" class="q-mb-md" data-testid="radar-card">
       <q-card-section>
         <div class="text-subtitle1">{{ $t('development.radar.displayTitle') }}</div>
         <!-- Same baseline comparison the player and coach views offer (CoachRadarCard,
@@ -115,7 +120,12 @@
     </q-card>
 
     <!-- Neglected skill alert -->
-    <q-banner v-if="store.neglectedCodes.length > 0" class="bg-warning text-white q-mb-md" rounded>
+    <q-banner
+      v-if="store.neglectedCodes.length > 0"
+      class="bg-warning text-white q-mb-md"
+      rounded
+      data-testid="parent-neglected-banner"
+    >
       {{ $t('development.portal.neglectedAlert', { skills: neglectedSkillNames }) }}
     </q-banner>
 

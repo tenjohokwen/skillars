@@ -71,7 +71,7 @@ class RadarAssessmentServiceTest {
         org.mockito.Mockito.lenient().when(coachProfileService.getCoachIdByUserId(COACH_USER_ID)).thenReturn(COACH_ID);
         org.mockito.Mockito.lenient().when(coachProfileService.getCoachSubscriptionTier(COACH_ID))
             .thenReturn(CoachSubscriptionTier.INSTRUCTOR);
-        org.mockito.Mockito.lenient().when(playerProfileService.getParentIdByPlayerId(PLAYER_ID)).thenReturn(PARENT_ID);
+        org.mockito.Mockito.lenient().when(playerProfileService.findParentIdByPlayerId(PLAYER_ID)).thenReturn(PARENT_ID);
         org.mockito.Mockito.lenient().when(radarRepository.findByPlayerIdAndCoachIdOrderByAssessmentDateDesc(
             PLAYER_ID, PARENT_ID, COACH_ID)).thenReturn(List.of());
         org.mockito.Mockito.lenient().when(radarRepository.countDistinctOtherCoachesBySkill(
@@ -125,5 +125,18 @@ class RadarAssessmentServiceTest {
         verify(erasureGuard).isErasedUnderLock(eq(PLAYER_ID), anyString());
         verify(radarRepository).saveAll(anyList());
         verify(publisher).publishEvent(any(RadarEntrySubmittedEvent.class));
+    }
+
+    // Found by Pitchside DEV-01: a self-registered player has no parent, and the throwing parent lookup
+    // turned every assessment of one into "player not found".
+    @Test
+    void submitAssessment_selfRegisteredPlayer_savesAndPublishesWithNoParent() {
+        when(playerProfileService.findParentIdByPlayerId(PLAYER_ID)).thenReturn(null);
+        when(skillDefinitionRepository.findAllByCodeIn(Set.of("PASS"))).thenReturn(List.of(mock(SkillDefinition.class)));
+
+        service.submitAssessment(COACH_USER_ID, PLAYER_ID, oneSkillRequest());
+
+        verify(radarRepository).saveAll(anyList());
+        verify(publisher).publishEvent(new RadarEntrySubmittedEvent(PLAYER_ID, null, Set.of("PASS")));
     }
 }
