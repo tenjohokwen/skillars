@@ -1,4 +1,4 @@
-# Story skillars-deferred-180: Pre-launch hardening (JWT chain check fails closed; Idempotency-Key required; refresh/logout rate-limited)
+# Story skillars-deferred-180: Pre-launch hardening (JWT chain check fails closed; Idempotency-Key required; refresh rate-limited)
 
 Status: in-progress
 
@@ -10,7 +10,7 @@ Status: in-progress
 As **the platform before go-live**, I want the session-chain check to refuse a JWT it cannot tie to a chain, every pack
 purchase to carry a client idempotency key, and the two open token endpoints to be rate-limited, so that a copied cookie
 jar cannot keep a session alive forever, a client retry cannot buy a second pack, and one account cannot exhaust the
-connection pool through one refresh-token row.
+connection pool through one refresh-token row on refresh.
 
 ## Ledger mapping
 
@@ -45,9 +45,11 @@ connection pool through one refresh-token row.
 `payment.idempotencyKeyRequired` (checked in the resource so the error code is ours, not Spring's generic
 `MissingRequestHeaderException`). Format validation stays in the service.
 
-**D24.** `@RateLimited(key = "auth_refresh" / "auth_logout", capacity = 20, duration = 1 minute)`, per IP like every other
-bucket. 20 rather than 10 so a household or club behind one NAT never hits it on logout; a single-source flood is still
-cut to 20 requests a minute. Buckets are per JVM, like the rest.
+**D24.** `@RateLimited(key = "auth_refresh", capacity = 20, duration = 1 minute)`, per IP like every other bucket (per JVM).
+The SPA never calls refresh, so only API clients meet it. **Logout is deliberately not limited** (review round 1, both
+arms): a per-IP bucket on an unauthenticated endpoint can be drained by anyone behind the same NAT, and a refused logout
+revokes nothing and clears no HttpOnly cookie while the SPA reports success. Its lock queue is bounded by the unlocked
+already-revoked pre-check.
 
 ## Acceptance Criteria
 
@@ -55,7 +57,7 @@ cut to 20 requests a minute. Buckets are per JVM, like the rest.
    with the same 401 as a dead chain; a claimless JWT sent with its own live `rtkn` is still repaired and passes.
 2. **AC2** `POST /api/payment/session-packs/purchase` without `Idempotency-Key` (or blank) answers 400
    `payment.idempotencyKeyRequired` and never reaches the service.
-3. **AC3** `POST /api/auth/refresh` and `/logout` carry `@RateLimited` (20/min per IP).
+3. **AC3** `POST /api/auth/refresh` carries `@RateLimited` (20/min per IP); `/logout` deliberately does not.
 4. **AC4** Javadocs, dev docs, the payments/security runbook text, the provisioning checklist and `deferred-work.md` reflect
    the decisions above; the closed items are deleted from the ledger.
 
@@ -89,5 +91,7 @@ Claude Opus 5.5 (claude-opus-5-5)
 
 ### Change Log
 
+- 2026-11-08: /pr-review round 1 (both arms, medium): the logout rate limit let anyone on a shared IP block others'
+  logouts; removed, refresh keeps it.
 - 2026-11-08: created from the owner's decisions; D23/D24; implemented T1-T4. The unannotated Spring `POST /api/logout`
   reaches the same lock only until the first revoke commits (unlocked pre-check); recorded in the ledger, not changed.

@@ -112,13 +112,16 @@ and deleted from the list below.
   `rtkn` against `POST /api/auth/refresh` and `/api/auth/logout` (both `permitAll`, unrate-limited) queue on
   the row, each holding a servlet thread and a pooled connection until the holder finishes. Unchanged by
   that story (the same rows previously queued behind `markUsedByTokenHash`'s plain `UPDATE`) and bounded in
-  practice because every holder is a short transaction. **skillars-deferred-180 rate-limited both endpoints**
-  (`@RateLimited`, 20 a minute per IP, owner decision 2026-11-08), which closes the single-source flood: one
-  account's own `rtkn` replayed in parallel no longer exhausts the 25-connection pool. **Still open:** a many-source
-  flood (per-IP buckets, per JVM), and the unannotated Spring `POST /api/logout`, which reaches the lock only until
-  the first revoke commits (later replays are answered by the unlocked pre-check). The follow-up, if the edge proxy
-  ends up without rate limiting, is `SET LOCAL lock_timeout` at the start of the refresh and logout transactions
-  (not connection-wide: that would change every locking query); a logout that times out then needs its own handling.
+  practice because every holder is a short transaction. **skillars-deferred-180 rate-limited refresh**
+  (`@RateLimited`, 20 a minute per IP, owner decision 2026-11-08), which closes the single-source flood there: one
+  account's own `rtkn` replayed in parallel no longer exhausts the 25-connection pool. Logout was left unlimited after
+  review: a per-IP bucket on an unauthenticated endpoint can be drained by anyone behind the same NAT, and a refused
+  logout revokes nothing while the SPA reports success. Logout's queue is bounded by the unlocked already-revoked
+  pre-check (only the first parallel burst on a live chain reaches the lock; the same holds for the Spring
+  `POST /api/logout`). **Still open:** a many-source flood on refresh (per-IP buckets, per JVM), and that first burst on
+  logout. The follow-up, if the edge proxy ends up without rate limiting, is `SET LOCAL lock_timeout` at the start of the
+  refresh and logout transactions (not connection-wide: that would change every locking query); a logout that times
+  out then needs its own handling.
 
 - RS03b [medium/security] Lost old mailbox and forgotten password: no self-service recovery. An email change can be
   undone only from the old address (skillars-deferred-172), and a password reset goes to the account's current

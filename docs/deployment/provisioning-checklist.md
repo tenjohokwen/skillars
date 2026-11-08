@@ -1633,7 +1633,7 @@ an operator must now do.
   fallback (no setup needed; Search is unavailable in India). No new job, webhook, config key or env var.
 - 2026-11-08: skillars-deferred-180 (no migration). A JWT without the `rtsid` chain claim is refused unless its own `rtkn`
   names a live chain (UAT sessions older than V225 may be signed out once). `POST /api/payment/session-packs/purchase` requires
-  `Idempotency-Key` (400 `payment.idempotencyKeyRequired`; the SPA already sends it). `POST /api/auth/refresh` and
-  `/api/auth/logout` are rate-limited to 20 a minute per IP. A partial Dashboard refund of a pack leaves the pack whole.
+  `Idempotency-Key` (400 `payment.idempotencyKeyRequired`; the SPA already sends it). `POST /api/auth/refresh` is
+  rate-limited to 20 a minute per IP (logout deliberately is not). A partial Dashboard refund of a pack leaves the pack whole.
   New checklist item: revisit `MAX_GRACE_HOPS` before shipping a client that calls `POST /api/auth/refresh`. No new job,
   webhook, config key or env var.

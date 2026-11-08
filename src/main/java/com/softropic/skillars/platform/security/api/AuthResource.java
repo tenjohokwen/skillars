@@ -60,11 +60,11 @@ public class AuthResource {
      * This is <b>not</b> the same as {@code /refresh} (see class JavaDoc): that endpoint only
      * extends the TTL of an already-valid session and returns an empty {@code 200}.
      */
-    // skillars-deferred-180: refresh and logout are permitAll and both lock the presented refresh-token row
-    // PESSIMISTIC_WRITE, which PostgreSQL waits on without a bound. Unlimited, parallel replays of one rtkn (anyone's
-    // own) queue on that row, each holding a pooled connection, until the pool is exhausted. Per IP, like every bucket;
-    // 20 a minute so a household or club behind one NAT never meets it. Bounding the wait itself (SET LOCAL
-    // lock_timeout) stays in deferred-work.md as the follow-up for a many-source flood.
+    // skillars-deferred-180: refresh is permitAll and locks the presented refresh-token row PESSIMISTIC_WRITE, which
+    // PostgreSQL waits on without a bound, on every call. Unlimited parallel replays of one rtkn (anyone's own) queued on
+    // that row, each holding a pooled connection, until the pool was exhausted. Per IP, like every bucket; the SPA never
+    // calls this endpoint, so only API clients meet the limit. Bounding the wait itself (SET LOCAL lock_timeout) stays in
+    // deferred-work.md as the follow-up for a many-source flood.
     @PostMapping("/refresh")
     @PreAuthorize("permitAll()")
     @RateLimited(key = "auth_refresh", capacity = 20, duration = 1)
@@ -74,7 +74,10 @@ public class AuthResource {
 
     @PostMapping("/logout")
     @PreAuthorize("permitAll()")
-    @RateLimited(key = "auth_logout", capacity = 20, duration = 1)
+    // Deliberately NOT rate-limited (skillars-deferred-180 review): a per-IP bucket on an unauthenticated endpoint can be
+    // drained by anyone behind the same NAT, and a refused logout neither revokes the chain nor clears the HttpOnly
+    // cookies while the SPA reports success. The lock queue is bounded anyway: once the chain is revoked, replays are
+    // answered by RefreshTokenRevocationService's unlocked pre-check.
     public ResponseEntity<Void> logout(HttpServletRequest req, HttpServletResponse res) {
         authService.logout(req, res);
         return ResponseEntity.noContent().build();
