@@ -61,6 +61,22 @@ describe('ConsoleGate', () => {
     expect(() => gate.assertClean()).not.toThrow()
   })
 
+  it('accepts messages a test allows from then on, and only those', () => {
+    const page = new FakePage()
+    const gate = new ConsoleGate({ mode: 'strict' })
+    gate.attach(page)
+    page.emit('console', consoleMessage('error', '[Server Error] before the allowance'))
+    gate.allow('[Server Error]', /offline/i)
+    page.emit('console', consoleMessage('error', '[Server Error] GET /api/x 500'))
+    page.emit('console', consoleMessage('error', 'Network went OFFLINE'))
+    page.emit('console', consoleMessage('error', 'something else'))
+
+    expect(gate.violations().map((v) => v.text)).toEqual([
+      '[Server Error] before the allowance',
+      'something else',
+    ])
+  })
+
   it("skips the browser's own resource-load errors unless asked to keep them", () => {
     const resource =
       'Failed to load resource: the server responded with a status of 401 (Unauthorized)'

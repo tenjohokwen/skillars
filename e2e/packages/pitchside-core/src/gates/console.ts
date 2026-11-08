@@ -38,6 +38,7 @@ export interface ConsoleEventSource {
  */
 export class ConsoleGate {
   private readonly found: ConsoleViolation[] = []
+  private readonly allowed: (string | RegExp)[] = []
 
   constructor(private readonly options: ConsoleGateOptions) {}
 
@@ -71,6 +72,15 @@ export class ConsoleGate {
     })
   }
 
+  /**
+   * Accept these messages for the rest of this test only: for a spec that provokes an error on purpose (a 500
+   * from a stubbed endpoint, a page taken offline) and asserts how the app copes. The gate is test-scoped, so
+   * the allowance never leaks into another test. Messages recorded before the call still count.
+   */
+  allow(...patterns: (string | RegExp)[]): void {
+    this.allowed.push(...patterns)
+  }
+
   violations(): readonly ConsoleViolation[] {
     return this.found
   }
@@ -93,7 +103,7 @@ export class ConsoleGate {
   }
 
   private record(violation: ConsoleViolation): void {
-    const ignored = (this.options.ignore ?? []).some((rule) =>
+    const ignored = [...(this.options.ignore ?? []), ...this.allowed].some((rule) =>
       typeof rule === 'string' ? violation.text.includes(rule) : rule.test(violation.text),
     )
     if (!ignored) this.found.push(violation)
