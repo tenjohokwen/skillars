@@ -1,6 +1,6 @@
 <template>
   <q-page class="q-pa-md">
-    <div class="safeguarding-page glass-card q-pa-lg">
+    <div class="safeguarding-page glass-card q-pa-lg" data-testid="safeguarding-page">
       <div class="text-h6">{{ t('safeguarding.coach.title') }}</div>
       <div class="text-body2 q-mb-md" style="color: var(--text-secondary)">
         {{ t('safeguarding.coach.subtitle') }}

@@ -1917,4 +1917,114 @@ export class Provisioner {
     )
     return row?.status
   }
+
+  // ─── Suite Q: privacy ────────────────────────────────────────────────────────────────────────
+
+  /**
+   * A GDPR export request for a user (or, with `playerId`, a parent's request for that child) in a
+   * given state, as if requested earlier. SQL seam: a real request is built within seconds, too fast
+   * to see it in flight. Returns its id.
+   */
+  async seedExportRequest(
+    user: { userId: string },
+    status: 'PENDING' | 'PROCESSING' | 'FAILED',
+    playerId?: string,
+  ): Promise<string> {
+    const sql = await this.sql()
+    const [row] = await sql.query<{ id: string }>(
+      `INSERT INTO admin.gdpr_requests (user_id, request_type, status, player_id, failed_at)
+       VALUES ($1::bigint, 'EXPORT', $2::varchar, $3::bigint, CASE WHEN $2::varchar = 'FAILED' THEN now() END)
+       RETURNING id`,
+      [user.userId, status, playerId ?? null],
+    )
+    return row!.id
+  }
+
+  /** Moves a GDPR request on: to FAILED, or (COMPLETED rows only) its download link's expiry into the past. */
+  async setExportRequest(
+    requestId: string,
+    change: { status?: 'FAILED'; expired?: boolean },
+  ): Promise<void> {
+    const sql = await this.sql()
+    const rows = await sql.query(
+      `UPDATE admin.gdpr_requests
+          SET status = COALESCE($2::varchar, status),
+              failed_at = CASE WHEN $2::varchar = 'FAILED' THEN now() ELSE failed_at END,
+              expires_at = CASE WHEN $3::boolean THEN now() - interval '1 minute' ELSE expires_at END
+        WHERE id = $1::uuid
+        RETURNING id`,
+      [requestId, change.status ?? null, change.expired ?? false],
+    )
+    if (rows.length !== 1) throw new Error(`No GDPR request ${requestId}`)
+  }
+
+  /** The user's newest export request of the given scope (their own, or one child's). */
+  async latestExport(
+    user: { userId: string },
+    playerId?: string,
+  ): Promise<{ id: string; status: string } | undefined> {
+    const sql = await this.sql()
+    const [row] = await sql.query<{ id: string; status: string }>(
+      `SELECT id, status FROM admin.gdpr_requests
+        WHERE user_id = $1::bigint AND request_type = 'EXPORT'
+          AND player_id IS NOT DISTINCT FROM $2::bigint
+        ORDER BY created_at DESC LIMIT 1`,
+      [user.userId, playerId ?? null],
+    )
+    return row
+  }
+
+  /** Whether a player profile is still listed for its parent (a child erasure deletes or tombstones it). */
+  async childErased(playerId: string): Promise<boolean> {
+    const sql = await this.sql()
+    const [row] = await sql.query<{ n: string }>(
+      `SELECT count(*)::text AS n FROM admin.gdpr_requests
+        WHERE player_id = $1::bigint AND request_type = 'ERASURE' AND status = 'COMPLETED'`,
+      [playerId],
+    )
+    return Number(row?.n ?? 0) > 0
+  }
+
+  /**
+   * A valid unsubscribe token for a user and an opt-out-able category, minted as
+   * UnsubscribeTokenService does: `v1.<base64url(userId:CATEGORY)>.<base64url(HMAC)>`, under a key
+   * derived from the stack's PLATFORM_REGISTRATION_VERIFICATION_SECRET. For specs that need a token
+   * without waiting for an email to carry one.
+   */
+  unsubscribeToken(user: { userId: string }, category: 'REMINDER' | 'DEVELOPMENT'): string {
+    const b64 = (bytes: Buffer) => bytes.toString('base64url')
+    const key = createHmac('sha256', 'e2e-registration-verification-secret-32b')
+      .update('skillars-email-unsubscribe-v1')
+      .digest()
+    const signed = `v1.${b64(Buffer.from(`${user.userId}:${category}`, 'utf8'))}`
+    return `${signed}.${b64(createHmac('sha256', key).update(signed).digest())}`
+  }
+
+  /**
+   * A full admin inspects a coach's pending safeguarding request (S-09), through the admin API: the check goes on
+   * record and the public profile shows it. ADM-14 (suite R) drives the same step through the admin console.
+   * Returns the record's valid-until date (ISO yyyy-MM-dd), as the coach's own status reports it.
+   */
+  async inspectSafeguarding(coach: CoachAccount): Promise<string> {
+    if (!coach.coachId) throw new Error('inspectSafeguarding needs a published coach')
+    const admin = await this.login({ email: E2E.adminEmail, password: E2E.adminPassword })
+    try {
+      await admin.api.post(`/admin/safeguarding/requests/${coach.coachId}/inspect`, {
+        expectStatus: (status) => status >= 200 && status < 300,
+      })
+    } finally {
+      await admin.dispose()
+    }
+    const self = await this.login(coach)
+    try {
+      const status = await self.api.json<{ status: string; validUntil: string }>(
+        'GET',
+        '/marketplace/coaches/me/safeguarding',
+      )
+      if (status.status !== 'VERIFIED') throw new Error(`Safeguarding check is ${status.status}`)
+      return status.validUntil
+    } finally {
+      await self.dispose()
+    }
+  }
 }

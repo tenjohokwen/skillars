@@ -61,10 +61,20 @@ class SessionPackPaymentServiceTest {
     @Mock com.softropic.skillars.platform.payment.repo.SessionPackPurchaseAttemptRepository attemptRepository;
     @Mock com.softropic.skillars.platform.payment.repo.StripeRefundFailureRepository refundFailureRepository;
 
+    @Mock com.softropic.skillars.platform.booking.repo.BookingRepository bookingRepository;
+    @Mock org.springframework.transaction.support.TransactionTemplate transactionTemplate;
+
     @InjectMocks SessionPackPaymentService sessionPackPaymentService;
 
     @BeforeEach
     void setUpLockRetryer() {
+        // The attempt row is written inside a transaction (PRV-03 erasure gate): run the callback inline.
+        lenient().when(transactionTemplate.execute(any())).thenAnswer(inv ->
+            ((org.springframework.transaction.support.TransactionCallback<?>) inv.getArgument(0)).doInTransaction(null));
+        lenient().when(coachProfileRepository.findByIdForUpdate(any())).thenAnswer(inv ->
+            java.util.Optional.of(new com.softropic.skillars.platform.marketplace.repo.CoachProfile()));
+        lenient().when(playerProfileRepository.findByIdForUpdate(any())).thenAnswer(inv ->
+            java.util.Optional.of(new com.softropic.skillars.platform.security.repo.PlayerProfile()));
         // skillars-deferred-169: every purchase inserts an attempt row first; the insert hands back the row with an id.
         lenient().when(attemptRepository.saveAndFlush(any())).thenAnswer(inv -> {
             com.softropic.skillars.platform.payment.repo.SessionPackPurchaseAttempt a = inv.getArgument(0);
@@ -102,6 +112,23 @@ class SessionPackPaymentServiceTest {
             .isInstanceOf(OperationNotAllowedException.class);
         verify(paymentGateway, never()).chargeAndCapture(any(), any(), any(), any(), any());
         verify(stripeCustomerRepository, never()).save(any());
+    }
+
+    /** PRV-03: a coach whose account erasure is in flight sells nothing; refused before the attempt row and the charge. */
+    @Test
+    void purchasePack_coachErasureInFlight_refusedBeforeAttemptAndCharge() {
+        PlayerProfile player = new PlayerProfile();
+        player.setId(PLAYER_ID);
+        player.setUserId(PARENT_ID);
+        when(playerProfileRepository.findById(PLAYER_ID)).thenReturn(Optional.of(player));
+        when(sessionPackTierRepository.findById(TIER_ID)).thenReturn(Optional.of(makeActiveTier()));
+        when(paymentGateway.isCoachPaymentReady(COACH_ID)).thenReturn(true);
+        when(bookingRepository.existsInFlightCoachErasureRequest(COACH_ID)).thenReturn(true);
+
+        assertThatThrownBy(() -> sessionPackPaymentService.purchasePack(PARENT_ID, TIER_ID, PLAYER_ID, "pm_test"))
+            .isInstanceOf(OperationNotAllowedException.class);
+        verify(attemptRepository, never()).saveAndFlush(any());
+        verify(paymentGateway, never()).chargeAndCapture(any(), any(), any(), any(), any());
     }
 
     // ── skillars-deferred-170 AC3 ──────────────────────────────────────────────────────────────

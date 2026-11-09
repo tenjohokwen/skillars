@@ -3,6 +3,8 @@ package com.softropic.skillars.platform.payment.service;
 import com.softropic.skillars.infrastructure.exception.ResourceNotFoundException;
 import com.softropic.skillars.infrastructure.persistence.PessimisticLockRetryer;
 import com.softropic.skillars.infrastructure.security.SecurityError;
+import com.softropic.skillars.platform.booking.contract.BookingError;
+import com.softropic.skillars.platform.booking.repo.BookingRepository;
 import com.softropic.skillars.platform.booking.service.BookingService;
 import com.softropic.skillars.platform.config.service.ConfigBounds;
 import com.softropic.skillars.platform.config.service.ConfigService;
@@ -51,6 +53,7 @@ import java.time.temporal.ChronoUnit;
 import java.util.EnumSet;
 import java.util.List;
 import java.util.Map;
+import org.springframework.transaction.support.TransactionTemplate;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
@@ -91,6 +94,8 @@ public class SessionPackPaymentService {
     private final UserIdentitySignalService userIdentitySignalService;
     /** S-27: Stripe Identity age gate for self-registered players. */
     private final AgeVerificationService ageVerificationService;
+    private final BookingRepository bookingRepository;
+    private final TransactionTemplate transactionTemplate;
 
     /**
      * Purchase a session pack for a player.
@@ -182,8 +187,36 @@ public class SessionPackPaymentService {
         }
         SessionPackPurchaseAttempt attempt;
         try {
-            attempt = attemptRepository.saveAndFlush(new SessionPackPurchaseAttempt(
-                parentId, key, packTierId, playerId, previousCard, blankToNull(paymentMethodId), customerExisted));
+            // Owner decision 2026-11-08 (PRV-03): an account erasure waits for unused pack credits and for purchases
+            // in flight, under the coach row and then the player row lock (GdprRequestService.requestErasure takes
+            // them in that order). The attempt row is written under the same locks, after refusing a coach or a
+            // family whose erasure is in flight: either the erasure sees this attempt, or this sees its request.
+            final String cardBefore = previousCard;
+            attempt = transactionTemplate.execute(status -> {
+                PlayerProfile lockedPlayer = lockRetryer.withBoundedRetry("SessionPackPaymentService.purchasePack", () -> {
+                    coachProfileRepository.findByIdForUpdate(tier.getCoachId())
+                        .orElseThrow(() -> new ResourceNotFoundException("Coach profile not found", "coach_profile"));
+                    return playerProfileRepository.findByIdForUpdate(playerId)
+                        .orElseThrow(() -> new ResourceNotFoundException("Player profile not found", "player_profile"));
+                });
+                // A child erased, or being erased on its own (the same rule as BookingService.requirePlayerBookableUnderLock):
+                // its credits could never be booked.
+                if (lockedPlayer.getDevelopmentDataErasedAt() != null
+                        || bookingRepository.existsInFlightChildErasureRequest(playerId)) {
+                    throw new OperationNotAllowedException("Player can no longer be booked",
+                        Map.of("player id", String.valueOf(playerId)), BookingError.PLAYER_NOT_BOOKABLE);
+                }
+                if (bookingRepository.existsInFlightCoachErasureRequest(tier.getCoachId())) {
+                    throw new OperationNotAllowedException("Coach account is being deleted",
+                        Map.of("coach id", tier.getCoachId()), BookingError.COACH_UNAVAILABLE);
+                }
+                if (bookingRepository.existsInFlightFamilyErasureRequest(playerId)) {
+                    throw new OperationNotAllowedException("Player can no longer be booked",
+                        Map.of("player id", String.valueOf(playerId)), BookingError.PLAYER_NOT_BOOKABLE);
+                }
+                return attemptRepository.saveAndFlush(new SessionPackPurchaseAttempt(
+                    parentId, key, packTierId, playerId, cardBefore, blankToNull(paymentMethodId), customerExisted));
+            });
         } catch (DataIntegrityViolationException e) {
             // Both UNIQUE (parent_id, attempt_key) and the open-per-parent index raise 23505: re-read by key first to tell
             // them apart (a concurrent same-key request found the winner; otherwise another attempt of this parent is open).

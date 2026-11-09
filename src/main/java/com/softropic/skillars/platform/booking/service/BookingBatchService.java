@@ -230,6 +230,7 @@ public class BookingBatchService {
             return c;
         });
         BookingService.requireBookableCoachStatus(lockedCoach, coachMeta);
+        bookingService.requireCoachNotBeingErased(lockedCoach.getId(), coachMeta);
         bookingService.requirePlayerBookableUnderLock(req.playerId(), "BookingBatchService.createBatch");
         // fix/booking-request-consent (M2): booking horizon + per-parent pending-request cap, under the coach
         // row lock like the single path (the whole batch counts against the cap).

@@ -10,6 +10,8 @@ import com.softropic.skillars.platform.security.SecurityIT;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.http.HttpHeaders;
@@ -45,9 +47,12 @@ class ActiveBookingsErasureBlockIT extends AbstractIntegrationTest {
     private static final long COACH_USER_ID    = 9220_000_001L;
     private static final long PARENT_USER_ID   = 9220_000_002L;
     private static final long PLAYER_ID        = 9220_000_003L;
+    private static final long SELF_USER_ID     = 9220_000_004L;
+    private static final long SELF_PLAYER_ID   = 9220_000_005L;
 
     private static final String COACH_EMAIL    = "gdpr.block.coach.9220@skillars-test.com";
     private static final String PARENT_EMAIL   = "gdpr.block.parent.9220@skillars-test.com";
+    private static final String SELF_EMAIL     = "gdpr.block.player.9220@skillars-test.com";
 
 
     @MockitoBean
@@ -91,22 +96,45 @@ class ActiveBookingsErasureBlockIT extends AbstractIntegrationTest {
 
             insertUser(PARENT_USER_ID, PARENT_EMAIL, passwordHash, "PARENT");
             grantAuthority(PARENT_USER_ID, "ROLE_PARENT");
-
+            // PLAYER_ID is the parent's child; SELF_PLAYER_ID a self-registered adult player's own profile.
+            jdbcTemplate.update("INSERT INTO main.player_profiles "
+                    + "(id, name, date_of_birth, position, age_tier, parent_id, independent_account_allowed, "
+                    + "consent_accepted_at, consent_policy_version, created_at, created_by) "
+                    + "VALUES (?, 'Block Kid', ?, 'FORWARD', 'AGE_10_12', ?, false, ?, '1.0', ?, 'system')",
+                PLAYER_ID, java.sql.Date.valueOf(java.time.LocalDate.now().minusYears(11)), PARENT_USER_ID,
+                Timestamp.from(Instant.now()), Timestamp.from(Instant.now()));
             jdbcTemplate.update(
-                "INSERT INTO booking.bookings (id, coach_id, parent_id, player_id, status, requested_start_time, requested_end_time, created_at, canonical_timezone) VALUES (?, ?, ?, ?, 'COMPLETED', ?, ?, ?, 'Europe/Berlin')",
+                "INSERT INTO main.authority (id, name, status, created_by, created_date) VALUES (9222, 'ROLE_PLAYER', 'ACTIVE', 'system', ?) ON CONFLICT (name) DO NOTHING",
+                Timestamp.from(Instant.now()));
+            insertUser(SELF_USER_ID, SELF_EMAIL, passwordHash, "PLAYER");
+            grantAuthority(SELF_USER_ID, "ROLE_PLAYER");
+            jdbcTemplate.update("INSERT INTO main.player_profiles "
+                    + "(id, name, date_of_birth, position, age_tier, user_id, independent_account_allowed, "
+                    + "created_at, created_by) "
+                    + "VALUES (?, 'Block Adult', ?, 'MIDFIELDER', 'ADULT', ?, true, ?, 'system')",
+                SELF_PLAYER_ID, java.sql.Date.valueOf(java.time.LocalDate.now().minusYears(25)), SELF_USER_ID,
+                Timestamp.from(Instant.now()));
+
+            // Settled 30 days ago: outside the (default 14-day) dispute window, so it no longer holds an erasure.
+            jdbcTemplate.update(
+                "INSERT INTO booking.bookings (id, coach_id, parent_id, player_id, status, requested_start_time, requested_end_time, created_at, canonical_timezone, status_changed_at, updated_at) VALUES (?, ?, ?, ?, 'COMPLETED', ?, ?, ?, 'Europe/Berlin', ?, ?)",
                 completedBookingId, coachProfileId, PARENT_USER_ID, PLAYER_ID,
-                Timestamp.from(Instant.now().minus(2, ChronoUnit.DAYS)),
-                Timestamp.from(Instant.now().minus(1, ChronoUnit.DAYS)),
-                Timestamp.from(Instant.now().minus(3, ChronoUnit.DAYS)));
+                Timestamp.from(Instant.now().minus(31, ChronoUnit.DAYS)),
+                Timestamp.from(Instant.now().minus(31, ChronoUnit.DAYS)),
+                Timestamp.from(Instant.now().minus(32, ChronoUnit.DAYS)),
+                Timestamp.from(Instant.now().minus(30, ChronoUnit.DAYS)),
+                Timestamp.from(Instant.now().minus(30, ChronoUnit.DAYS)));
 
             return null;
         });
     }
 
 
-    @Test
-    void requestErasure_coachWithActiveBookings_returns409() {
-        insertActiveBooking();
+    @ParameterizedTest
+    @ValueSource(strings = {"REQUESTED", "PAYMENT_PENDING", "CONFIRMED", "UPCOMING", "IN_PROGRESS",
+        "COMPLETED_PENDING_CONFIRMATION", "DISPUTED", "REFUND_PENDING"})
+    void requestErasure_coachWithLiveBooking_returns409(String status) {
+        insertActiveBooking(status);
         String cookies = loginAndGetCookies(COACH_EMAIL);
         assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
             baseUrl() + ERASURE_URL, HttpMethod.POST, null, authenticatedHeaders(cookies), Map.class))
@@ -126,8 +154,8 @@ class ActiveBookingsErasureBlockIT extends AbstractIntegrationTest {
     }
 
     @Test
-    void requestErasure_parentUserNotBlockedByCoachBookings_returns202() {
-        // A PARENT user requesting erasure is NOT subject to the coach-active-bookings check
+    void requestErasure_parentWithOnlyFinishedBookings_returns202() {
+        // The parent's child has only the COMPLETED booking from setUp: nothing live, so the erasure goes ahead.
         String cookies = loginAndGetCookies(PARENT_EMAIL);
         ResponseEntity<Map> resp = httpTestClient.makeHttpRequest(
             baseUrl() + ERASURE_URL, HttpMethod.POST, null, authenticatedHeaders(cookies), Map.class);
@@ -136,14 +164,132 @@ class ActiveBookingsErasureBlockIT extends AbstractIntegrationTest {
         assertThat(resp.getBody()).containsKey("requestId");
     }
 
+    @Test
+    void requestErasure_parentWhoseChildHasALiveBooking_returns409() {
+        // Owner decision 2026-11-08: a parent's erasure takes the child's data with it, so it is refused while
+        // the child has a live booking, as the child's own erasure is.
+        insertActiveBooking("CONFIRMED");
+        String cookies = loginAndGetCookies(PARENT_EMAIL);
+        assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
+            baseUrl() + ERASURE_URL, HttpMethod.POST, null, authenticatedHeaders(cookies), Map.class))
+            .isInstanceOf(HttpClientErrorException.class)
+            .satisfies(e -> {
+                assertThat(((HttpClientErrorException) e).getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
+                assertThat(((HttpClientErrorException) e).getResponseBodyAsString()).contains("gdpr.activeBookingsExist");
+            });
+    }
+
+    @Test
+    void requestErasure_adultPlayerWithALiveBooking_returns409() {
+        Instant start = Instant.now().plus(2, ChronoUnit.DAYS);
+        transactionTemplate.execute(ts -> {
+            jdbcTemplate.update(
+                "INSERT INTO booking.bookings (id, coach_id, parent_id, player_id, status, requested_start_time, requested_end_time, created_at, canonical_timezone) VALUES (?, ?, ?, ?, 'UPCOMING', ?, ?, ?, 'Europe/Berlin')",
+                UUID.randomUUID(), coachProfileId, SELF_USER_ID, SELF_PLAYER_ID,
+                Timestamp.from(start), Timestamp.from(start.plus(1, ChronoUnit.HOURS)), Timestamp.from(Instant.now()));
+            return null;
+        });
+        String cookies = loginAndGetCookies(SELF_EMAIL);
+        assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
+            baseUrl() + ERASURE_URL, HttpMethod.POST, null, authenticatedHeaders(cookies), Map.class))
+            .isInstanceOf(HttpClientErrorException.class)
+            .satisfies(e -> assertThat(((HttpClientErrorException) e).getStatusCode()).isEqualTo(HttpStatus.CONFLICT));
+    }
+
+    @Test
+    void requestErasure_adultPlayerWithOnlyFinishedBookings_returns202() {
+        String cookies = loginAndGetCookies(SELF_EMAIL);
+        ResponseEntity<Map> resp = httpTestClient.makeHttpRequest(
+            baseUrl() + ERASURE_URL, HttpMethod.POST, null, authenticatedHeaders(cookies), Map.class);
+        assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.ACCEPTED);
+    }
+
+    @Test
+    void requestErasure_coachWithASessionStillInsideTheDisputeWindow_returns409() {
+        // Owner decision 2026-11-08: a completed session can still be disputed for the window's length.
+        transactionTemplate.execute(ts -> {
+            jdbcTemplate.update(
+                "UPDATE booking.bookings SET status_changed_at = ?, updated_at = ? WHERE id = ?",
+                Timestamp.from(Instant.now().minus(2, ChronoUnit.DAYS)),
+                Timestamp.from(Instant.now().minus(2, ChronoUnit.DAYS)), completedBookingId);
+            return null;
+        });
+        for (String email : List.of(COACH_EMAIL, PARENT_EMAIL)) {
+            String cookies = loginAndGetCookies(email);
+            assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
+                baseUrl() + ERASURE_URL, HttpMethod.POST, null, authenticatedHeaders(cookies), Map.class))
+                .isInstanceOf(HttpClientErrorException.class)
+                .satisfies(e -> assertThat(((HttpClientErrorException) e).getResponseBodyAsString())
+                    .contains("gdpr.disputeWindowOpen"));
+        }
+    }
+
+    @Test
+    void requestErasure_unusedPackCredits_holdTheCoachAndTheFamily() {
+        // Owner decision 2026-11-08: unused, unexpired prepaid credits block both sides of the pack.
+        transactionTemplate.execute(ts -> {
+            UUID tierId = UUID.randomUUID();
+            jdbcTemplate.update(
+                "INSERT INTO payment.session_pack_tiers (pack_tier_id, coach_id, session_count, total_price, price_per_session) VALUES (?, ?, 5, 200, 40)",
+                tierId, coachProfileId);
+            jdbcTemplate.update(
+                "INSERT INTO payment.session_pack_purchases (parent_id, coach_id, pack_tier_id, price_per_session, remaining_sessions, player_id, expires_at) VALUES (?, ?, ?, 40, 2, ?, ?)",
+                PARENT_USER_ID, coachProfileId, tierId, PLAYER_ID, Timestamp.from(Instant.now().plus(60, ChronoUnit.DAYS)));
+            return null;
+        });
+        for (String email : List.of(COACH_EMAIL, PARENT_EMAIL)) {
+            String cookies = loginAndGetCookies(email);
+            assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
+                baseUrl() + ERASURE_URL, HttpMethod.POST, null, authenticatedHeaders(cookies), Map.class))
+                .isInstanceOf(HttpClientErrorException.class)
+                .satisfies(e -> assertThat(((HttpClientErrorException) e).getResponseBodyAsString())
+                    .contains("gdpr.unusedPackCredits"));
+        }
+    }
+
+    @Test
+    void requestChildErasure_isHeldByTheSameDisputeWindowAndPackCredits() {
+        // Owner decision 2026-11-08: erasing one child from the hub cannot side-step the account-level holds.
+        String childErasureUrl = baseUrl() + "/api/gdpr/players/" + PLAYER_ID + "/erasure";
+        transactionTemplate.execute(ts -> {
+            jdbcTemplate.update("UPDATE booking.bookings SET status_changed_at = ? WHERE id = ?",
+                Timestamp.from(Instant.now().minus(2, ChronoUnit.DAYS)), completedBookingId);
+            return null;
+        });
+        String cookies = loginAndGetCookies(PARENT_EMAIL);
+        assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
+            childErasureUrl, HttpMethod.POST, null, authenticatedHeaders(cookies), Map.class))
+            .isInstanceOf(HttpClientErrorException.class)
+            .satisfies(e -> assertThat(((HttpClientErrorException) e).getResponseBodyAsString())
+                .contains("gdpr.disputeWindowOpen"));
+
+        transactionTemplate.execute(ts -> {
+            jdbcTemplate.update("UPDATE booking.bookings SET status_changed_at = ? WHERE id = ?",
+                Timestamp.from(Instant.now().minus(30, ChronoUnit.DAYS)), completedBookingId);
+            UUID tierId = UUID.randomUUID();
+            jdbcTemplate.update(
+                "INSERT INTO payment.session_pack_tiers (pack_tier_id, coach_id, session_count, total_price, price_per_session) VALUES (?, ?, 5, 200, 40)",
+                tierId, coachProfileId);
+            jdbcTemplate.update(
+                "INSERT INTO payment.session_pack_purchases (parent_id, coach_id, pack_tier_id, price_per_session, remaining_sessions, player_id, expires_at) VALUES (?, ?, ?, 40, 1, ?, ?)",
+                PARENT_USER_ID, coachProfileId, tierId, PLAYER_ID, Timestamp.from(Instant.now().plus(60, ChronoUnit.DAYS)));
+            return null;
+        });
+        assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
+            childErasureUrl, HttpMethod.POST, null, authenticatedHeaders(cookies), Map.class))
+            .isInstanceOf(HttpClientErrorException.class)
+            .satisfies(e -> assertThat(((HttpClientErrorException) e).getResponseBodyAsString())
+                .contains("gdpr.unusedPackCredits"));
+    }
+
     // ── helpers ──
 
-    private void insertActiveBooking() {
+    private void insertActiveBooking(String status) {
         Instant futureTime = Instant.now().plus(2, ChronoUnit.DAYS);
         transactionTemplate.execute(ts -> {
             jdbcTemplate.update(
-                "INSERT INTO booking.bookings (id, coach_id, parent_id, player_id, status, requested_start_time, requested_end_time, created_at, canonical_timezone) VALUES (?, ?, ?, ?, 'ACCEPTED', ?, ?, ?, 'Europe/Berlin')",
-                activeBookingId, coachProfileId, PARENT_USER_ID, PLAYER_ID,
+                "INSERT INTO booking.bookings (id, coach_id, parent_id, player_id, status, requested_start_time, requested_end_time, created_at, canonical_timezone) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'Europe/Berlin')",
+                activeBookingId, coachProfileId, PARENT_USER_ID, PLAYER_ID, status,
                 Timestamp.from(futureTime), Timestamp.from(futureTime.plus(1, ChronoUnit.HOURS)),
                 Timestamp.from(Instant.now()));
             return null;

@@ -1,6 +1,9 @@
 package com.softropic.skillars.platform.admin.service;
 
 import com.softropic.skillars.infrastructure.exception.ResourceNotFoundException;
+import com.softropic.skillars.infrastructure.persistence.PessimisticLockRetryer;
+import com.softropic.skillars.platform.config.service.ConfigBounds;
+import com.softropic.skillars.platform.config.service.ConfigService;
 import com.softropic.skillars.infrastructure.security.SecurityError;
 import com.softropic.skillars.platform.admin.contract.AdminGdprRequestDto;
 import com.softropic.skillars.platform.admin.contract.GdprErasureRequestedEvent;
@@ -43,11 +46,12 @@ public class GdprRequestService {
     private static final List<String> ACTIVE_STATUSES = List.of("PENDING", "PROCESSING");
 
     /**
-     * Child erasure is refused while the child has any booking that is still live (a session or money
-     * in flight). Terminal bookings (COMPLETED, DECLINED, CANCELLED*, NO_SHOW_*, REFUNDED) keep their
-     * rows for the parent's financial record; the erasure only anonymises their free text.
+     * Erasure is refused while a booking is still live (a session or money in flight): the child's,
+     * for a child erasure, or the coach's own, for a coach's account. Terminal bookings (COMPLETED,
+     * DECLINED, CANCELLED*, NO_SHOW_*, REFUNDED) keep their rows for the financial record; the erasure
+     * only anonymises their free text.
      */
-    static final List<String> CHILD_ERASURE_BLOCKING_BOOKING_STATUSES = List.of(
+    static final List<String> ERASURE_BLOCKING_BOOKING_STATUSES = List.of(
         "REQUESTED", "ACCEPTED", "PAYMENT_PENDING", "CONFIRMED", "UPCOMING", "IN_PROGRESS", "PAUSED",
         "COMPLETED_PENDING_CONFIRMATION", "DISPUTED", "REFUND_PENDING");
 
@@ -57,6 +61,8 @@ public class GdprRequestService {
     private final PlayerProfileRepository playerProfileRepository;
     private final ApplicationEventPublisher eventPublisher;
     private final DevelopmentDataErasureGuard developmentDataErasureGuard;
+    private final PessimisticLockRetryer lockRetryer;
+    private final ConfigService configService;
 
     @Transactional
     public UUID requestExport(Long userId) {
@@ -105,16 +111,68 @@ public class GdprRequestService {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "gdpr.exportInProgress");
         }
 
+        // Owner decision 2026-11-08 (PRV-03): any live booking blocks a coach's erasure, as it does a
+        // child's. The old list, REQUESTED and ACCEPTED, let a coach with paid, confirmed sessions
+        // delete the account (an accepted booking moves straight on to PAYMENT_PENDING, then
+        // CONFIRMED), leaving the families with sessions nobody would deliver.
         coachProfileRepository.findByUserId(userId).ifPresent(cp -> {
-            if (bookingRepository.existsByCoachIdAndStatusIn(cp.getId(), List.of("REQUESTED", "ACCEPTED"))) {
+            // Under the coach row lock every booking-creation path takes: a booking created concurrently
+            // either commits first and is seen here, or waits and then sees this request in flight
+            // (BookingService.requireCoachNotBeingErased).
+            lockRetryer.withBoundedRetry("GdprRequestService.requestErasure", () ->
+                coachProfileRepository.findByIdForUpdate(cp.getId())
+                    .orElseThrow(() -> new ResourceNotFoundException("Coach profile not found", "coach_profile")));
+            if (bookingRepository.existsByCoachIdAndStatusIn(cp.getId(), ERASURE_BLOCKING_BOOKING_STATUSES)) {
                 throw new ResponseStatusException(HttpStatus.CONFLICT, "gdpr.activeBookingsExist");
             }
+            if (gdprRequestRepository.coachHasDisputableBooking(cp.getId(), DisputeService.ELIGIBLE_STATUSES,
+                    disputeWindowStart())) {
+                throw new ResponseStatusException(HttpStatus.CONFLICT, "gdpr.disputeWindowOpen");
+            }
+            if (gdprRequestRepository.coachHasUnusedPackCredits(cp.getId())) {
+                throw new ResponseStatusException(HttpStatus.CONFLICT, "gdpr.unusedPackCredits");
+            }
         });
+
+        // Owner decision 2026-11-08 (PRV-03 follow-up): a parent's erasure takes every child's data with it, and
+        // an adult player's takes their own, so either is refused while one of those players has a live booking,
+        // as a child's own erasure is. Each player row is locked first (id order, after the coach row: the order
+        // booking creation takes them), so a booking created concurrently is either seen here or sees this
+        // request in flight (BookingService.requirePlayerBookableUnderLock).
+        List<Long> familyPlayerIds = familyPlayerIds(userId);
+        familyPlayerIds.forEach(id -> developmentDataErasureGuard.isErasedUnderLock(id, "GdprRequestService.requestErasure"));
+        if (!familyPlayerIds.isEmpty()) {
+            if (bookingRepository.existsByPlayerIdInAndStatusIn(familyPlayerIds, ERASURE_BLOCKING_BOOKING_STATUSES)) {
+                throw new ResponseStatusException(HttpStatus.CONFLICT, "gdpr.activeBookingsExist");
+            }
+            // Owner decision 2026-11-08: nor while a session can still be disputed, or prepaid credits are unused.
+            if (gdprRequestRepository.familyHasDisputableBooking(familyPlayerIds, DisputeService.ELIGIBLE_STATUSES,
+                    disputeWindowStart())) {
+                throw new ResponseStatusException(HttpStatus.CONFLICT, "gdpr.disputeWindowOpen");
+            }
+            if (gdprRequestRepository.familyHasUnusedPackCredits(userId, familyPlayerIds)) {
+                throw new ResponseStatusException(HttpStatus.CONFLICT, "gdpr.unusedPackCredits");
+            }
+        }
 
         GdprRequest request = insertOrConflict(new GdprRequest(userId, "ERASURE", "PENDING"));
         eventPublisher.publishEvent(new GdprErasureRequestedEvent(this, request.getId(), userId));
         log.info("[GDPR_ERASURE_REQUESTED] requestId={} userId={}", request.getId(), userId);
         return request.getId();
+    }
+
+    /** The earliest status change a dispute can still be raised against (DisputeService's window). */
+    private Instant disputeWindowStart() {
+        long days = configService.getBoundedLong(ConfigBounds.DISPUTES_SUBMISSION_WINDOW_DAYS);
+        return Instant.now().minus(days, java.time.temporal.ChronoUnit.DAYS);
+    }
+
+    /** The player profiles an account's erasure reaches: its own (a self-registered player) and its children, by id. */
+    private List<Long> familyPlayerIds(Long userId) {
+        java.util.TreeSet<Long> ids = new java.util.TreeSet<>();
+        playerProfileRepository.findByUserId(userId).ifPresent(p -> ids.add(p.getId()));
+        playerProfileRepository.findByParentIdOrderByIdAsc(userId).forEach(p -> ids.add(p.getId()));
+        return List.copyOf(ids);
     }
 
     /**
@@ -138,7 +196,7 @@ public class GdprRequestService {
     /**
      * Parent-requested erasure of a parent-owned (shadow) child profile — Article 17 for a data subject
      * with no account of their own. Refused while the child has a live booking (see
-     * {@link #CHILD_ERASURE_BLOCKING_BOOKING_STATUSES}) or while an export for the same child is still
+     * {@link #ERASURE_BLOCKING_BOOKING_STATUSES}) or while an export for the same child is still
      * being built.
      *
      * <p>fix/booking-integrity (B2): the live-booking check and the request insert run under the
@@ -160,8 +218,16 @@ public class GdprRequestService {
         if (gdprRequestRepository.existsByPlayerIdAndRequestTypeAndStatusIn(playerId, "EXPORT", ACTIVE_STATUSES)) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "gdpr.exportInProgress");
         }
-        if (bookingRepository.existsByPlayerIdAndStatusIn(playerId, CHILD_ERASURE_BLOCKING_BOOKING_STATUSES)) {
+        if (bookingRepository.existsByPlayerIdAndStatusIn(playerId, ERASURE_BLOCKING_BOOKING_STATUSES)) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "gdpr.activeBookingsExist");
+        }
+        // Owner decision 2026-11-08: the same holds as an account's erasure, which would take this child too.
+        if (gdprRequestRepository.familyHasDisputableBooking(List.of(playerId), DisputeService.ELIGIBLE_STATUSES,
+                disputeWindowStart())) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "gdpr.disputeWindowOpen");
+        }
+        if (gdprRequestRepository.familyHasUnusedPackCredits(null, List.of(playerId))) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "gdpr.unusedPackCredits");
         }
         GdprRequest request = insertOrConflict(new GdprRequest(parentUserId, playerId, "ERASURE", "PENDING"));
         eventPublisher.publishEvent(new GdprErasureRequestedEvent(this, request.getId(), parentUserId, playerId));

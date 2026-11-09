@@ -44,6 +44,9 @@ services:
       - APP_PAYMENT_STRIPE_PUBLISHABLE_KEY=pk_test_e2e_placeholder
       - APP_VIDEO_BUNNY_LIBRARY_ID=123456
       - APP_VIDEO_BUNNY_WEBHOOK_SIGNING_SECRET=e2e-webhook-signing-secret
+      # Keys email-verification links and unsubscribe tokens; pinned so a spec can mint a token the app
+      # accepts (provision.unsubscribeToken).
+      - PLATFORM_REGISTRATION_VERIFICATION_SECRET=e2e-registration-verification-secret-32b
       # Bunny Stream API calls go to WireMock (stack/wiremock/mappings/bunny-*.json). The browser's
       # TUS upload goes to a hard-coded https://video.bunnycdn.com/tusupload, which specs intercept
       # with page.route; processing is driven by signed webhooks (provision.bunnyWebhook).
@@ -115,7 +118,11 @@ services:
     entrypoint: ['/entrypoint.sh']
     command: >
       server -s3 -dir=/data -ip.bind=0.0.0.0 -s3.port=9500
-      -s3.config=/etc/seaweedfs/s3.json -master.volumeSizeLimitMB=256
+      -s3.config=/etc/seaweedfs/s3.json -master.volumeSizeLimitMB=32 -master.volumePreallocate=false
+    # /data is tmpfs, so every byte the volumes reserve is RAM in a small Docker VM. SeaweedFS creates
+    # six volumes on the first write and reserves each one's full size: at 256 MB that was 1.5 GB
+    # before anything was stored, and the OOM killer then took the app. Specs store small files, so
+    # 32 MB volumes, without pre-allocation, are plenty.
     tmpfs:
       - /data
     volumes:

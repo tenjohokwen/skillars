@@ -1,6 +1,6 @@
 <template>
   <q-page class="flex flex-center q-pa-md">
-    <div class="glass-card--static q-pa-xl unsubscribe-card">
+    <div class="glass-card--static q-pa-xl unsubscribe-card" data-testid="unsubscribe-page">
       <div class="text-page-title q-mb-md">{{ t('notifications.unsubscribe.title') }}</div>
 
       <div v-if="!token" class="text-meta" data-testid="unsub-missing">

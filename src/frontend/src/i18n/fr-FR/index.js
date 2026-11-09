@@ -2950,9 +2950,13 @@ export default {
       exportInProgress:
         'Un export est encore en préparation. Attendez qu’il soit terminé avant de supprimer.',
       activeBookings:
-        'Vous avez encore des demandes de réservation en attente ou acceptées. Réglez-les avant de supprimer votre compte.',
+        'Vous avez encore des réservations non réglées : des demandes, des séances à venir, ou des séances en attente de confirmation, d’un litige ou d’un remboursement. Vous pourrez supprimer votre compte une fois qu’elles seront réglées.',
       activeBookingsChild:
         'Cet enfant a encore une réservation active. Annulez-la ou terminez-la d’abord.',
+      unusedPackCredits:
+        'Ce compte a encore des crédits de séances prépayés non utilisés (ou un achat de forfait en cours). Vous pourrez supprimer votre compte une fois qu’ils auront été utilisés, auront expiré ou auront été remboursés.',
+      disputeWindowOpen:
+        'Une séance récente peut encore faire l’objet d’un litige. Vous pourrez supprimer votre compte une fois ce délai écoulé.',
       playerAlreadyErased: 'Les données de cet enfant ont déjà été supprimées.',
       notAllowed: 'Vous n’êtes pas autorisé à effectuer cette action.',
       generic: 'Une erreur est survenue. Veuillez réessayer.',

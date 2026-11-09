@@ -462,6 +462,7 @@ public class BookingService {
             return c;
         });
         requireBookableCoachStatus(lockedCoach, metaData);
+        requireCoachNotBeingErased(lockedCoach.getId(), metaData);
         requirePlayerBookableUnderLock(req.playerId(), "BookingService.createBookingRequest");
         requireRequestQuota(parentId, req.coachId(), List.of(req.requestedStartTime()));
 
@@ -595,6 +596,17 @@ public class BookingService {
         }
     }
 
+    /**
+     * A coach whose account erasure is in flight takes no new bookings. Must run under the coach row lock,
+     * which GdprRequestService.requestErasure also takes before its live-booking check (PRV-03).
+     */
+    void requireCoachNotBeingErased(UUID coachId, Map<String, Object> metaData) {
+        if (bookingRepository.existsInFlightCoachErasureRequest(coachId)) {
+            throw new OperationNotAllowedException("Coach account is being deleted", metaData,
+                BookingError.COACH_UNAVAILABLE);
+        }
+    }
+
     /** Stripe-readiness gate shared by single and batch creation (B2). */
     void requireCoachPaymentReady(UUID coachId) {
         if (!paymentGateway.isCoachPaymentReady(coachId)) {
@@ -638,12 +650,14 @@ public class BookingService {
      *       sees this booking and is refused with {@code gdpr.activeBookingsExist};</li>
      *   <li>{@code GdprErasureService} locks it before stamping {@code developmentDataErasedAt}.</li>
      * </ul>
-     * Lock order on the create paths is coach row, then player row; the erasure side never takes the
-     * coach row, so no cycle.
+     * Lock order everywhere is coach row, then player row: the create paths, and
+     * GdprRequestService.requestErasure (coach row, then every family player row in id order) and
+     * SessionPackPaymentService.purchasePack, so no cycle. A new path that locks both must keep that order.
      */
     void requirePlayerBookableUnderLock(Long playerId, String caller) {
         if (developmentDataErasureGuard.isErasedUnderLock(playerId, caller)
-                || bookingRepository.existsInFlightChildErasureRequest(playerId)) {
+                || bookingRepository.existsInFlightChildErasureRequest(playerId)
+                || bookingRepository.existsInFlightFamilyErasureRequest(playerId)) {
             throw new OperationNotAllowedException("Player can no longer be booked",
                 Map.of("player id", String.valueOf(playerId)), BookingError.PLAYER_NOT_BOOKABLE);
         }

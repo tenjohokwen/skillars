@@ -1,6 +1,6 @@
 <template>
   <q-page class="q-pa-md">
-    <div class="glass-card q-pa-lg">
+    <div class="glass-card q-pa-lg" data-testid="player-dashboard">
       <div class="text-h6 q-mb-xs">{{ t('player.dashboard.title') }}</div>
       <div class="text-meta q-mb-lg">{{ t('player.dashboard.body') }}</div>
 
@@ -60,6 +60,7 @@
           :to="{ name: 'player-age-verification' }"
           class="glass-card soft-hover player-dashboard__tile"
           data-testid="age-verification-tile"
+          :data-state="ageStatus.state"
         >
           <q-icon
             :name="ageStatus.state === 'VERIFIED' ? 'verified' : 'badge'"

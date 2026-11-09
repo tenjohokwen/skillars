@@ -293,6 +293,8 @@ function errorMessageKey(err) {
       ? 'privacy.errors.activeBookingsChild'
       : 'privacy.errors.activeBookings',
     'gdpr.playerAlreadyErased': 'privacy.errors.playerAlreadyErased',
+    'gdpr.unusedPackCredits': 'privacy.errors.unusedPackCredits',
+    'gdpr.disputeWindowOpen': 'privacy.errors.disputeWindowOpen',
   }
   if (map[message]) return map[message]
   if (errorKey === 'MISSING_RIGHTS') return 'privacy.errors.notAllowed'

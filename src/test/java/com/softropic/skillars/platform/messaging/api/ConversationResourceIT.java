@@ -364,13 +364,16 @@ class ConversationResourceIT extends AbstractIntegrationTest {
         assertThat(resp.getBody().get("canSend")).isEqualTo(false);
 
         // The player is an adult: their parent is no party to the thread.
-        ResponseEntity<Map> parent = httpTestClient.makeHttpRequest(
+        // HttpTestClient throws on a 4xx.
+        String parentCookies = loginAndGetCookies(PARENT_EMAIL);
+        assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
             baseUrl() + MESSAGING_BASE + "/conversations/" + conversationId,
             HttpMethod.GET,
             null,
-            authenticatedHeaders(loginAndGetCookies(PARENT_EMAIL)),
-            Map.class);
-        assertThat(parent.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
+            authenticatedHeaders(parentCookies),
+            Map.class))
+            .isInstanceOf(HttpClientErrorException.class)
+            .satisfies(e -> assertThat(((HttpClientErrorException) e).getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN));
     }
 
     @Test

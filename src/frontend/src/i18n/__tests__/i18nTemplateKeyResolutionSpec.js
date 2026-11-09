@@ -296,11 +296,11 @@ const DYNAMIC_KEY_CALL_SITES = [
       't on each entry of consequenceKeys, a computed list of literal privacy.consequence* keys',
   },
   {
-    at: 'src/components/profile/PrivacyDataSection.vue:308',
+    at: 'src/components/profile/PrivacyDataSection.vue:310',
     reason: 't on errorMessageKey(), which maps a backend error to a literal privacy.errors.* key',
   },
   {
-    at: 'src/components/profile/PrivacyDataSection.vue:349',
+    at: 'src/components/profile/PrivacyDataSection.vue:351',
     reason: 't on errorMessageKey(), the erasure-dialog twin of the call above',
   },
   {

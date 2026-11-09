@@ -28,6 +28,7 @@ test.describe('P · The bell', () => {
       tags: ['@regression', '@parent', '@coach', '@notifications'],
     }),
     async ({ actor, suite, provision }) => {
+      test.slow() // provisions a published coach and a paid booking before the browser part
       const coach = await provision.coach()
       const parent = await provision.parent()
       await provision.saveCard(parent)
@@ -173,6 +174,7 @@ test.describe('P · The inbox page', () => {
       tags: ['@regression', '@parent', '@notifications'],
     }),
     async ({ actor, suite, provision }) => {
+      test.slow() // provisions a published coach and a paid booking before the browser part
       const coach = await provision.coach()
       const parent = await provision.parent()
       await provision.saveCard(parent)

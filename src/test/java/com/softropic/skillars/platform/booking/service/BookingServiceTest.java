@@ -242,6 +242,32 @@ class BookingServiceTest {
         verify(bookingRepository, never()).save(any());
     }
 
+    @Test
+    void createBookingRequest_familyAccountErasureInFlight_isRejected() {
+        stubCreatePathUpToPlayerLock();
+        when(bookingRepository.existsInFlightFamilyErasureRequest(PLAYER_ID)).thenReturn(true);
+
+        CreateBookingRequest req = makeValidRequest(COACH_ID, PLAYER_ID, makeCoveringWindow(COACH_ID));
+        assertThatThrownBy(() -> bookingService.createBookingRequest(PARENT_ID, req))
+            .isInstanceOf(OperationNotAllowedException.class)
+            .satisfies(e -> assertThat(((OperationNotAllowedException) e).getErrorCode())
+                .isEqualTo(BookingError.PLAYER_NOT_BOOKABLE));
+        verify(bookingRepository, never()).save(any());
+    }
+
+    @Test
+    void createBookingRequest_coachAccountErasureInFlight_isRejected() {
+        stubCreatePathUpToPlayerLock();
+        when(bookingRepository.existsInFlightCoachErasureRequest(COACH_ID)).thenReturn(true);
+
+        CreateBookingRequest req = makeValidRequest(COACH_ID, PLAYER_ID, makeCoveringWindow(COACH_ID));
+        assertThatThrownBy(() -> bookingService.createBookingRequest(PARENT_ID, req))
+            .isInstanceOf(OperationNotAllowedException.class)
+            .satisfies(e -> assertThat(((OperationNotAllowedException) e).getErrorCode())
+                .isEqualTo(BookingError.COACH_UNAVAILABLE));
+        verify(bookingRepository, never()).save(any());
+    }
+
     private void stubCreatePathUpToPlayerLock() {
         CoachProfile coach = makeActiveCoach(COACH_ID, COACH_USER_ID);
         when(playerProfileRepository.findById(PLAYER_ID)).thenReturn(Optional.of(makePlayer(PLAYER_ID, PARENT_ID)));

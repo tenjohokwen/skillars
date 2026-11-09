@@ -2976,9 +2976,13 @@ export default {
       exportInProgress:
         'Ein Export wird noch erstellt. Warte, bis er fertig ist, bevor du löschst.',
       activeBookings:
-        'Du hast noch offene oder angenommene Buchungsanfragen. Kläre diese, bevor du dein Konto löschst.',
+        'Du hast noch Buchungen, die nicht abgeschlossen sind: Anfragen, anstehende Sitzungen oder Sitzungen, die auf eine Bestätigung, einen Streitfall oder eine Erstattung warten. Du kannst dein Konto löschen, sobald sie abgeschlossen sind.',
       activeBookingsChild:
         'Dieses Kind hat noch eine aktive Buchung. Storniere oder beende sie zuerst.',
+      unusedPackCredits:
+        'Auf diesem Konto gibt es noch ungenutzte, vorausbezahlte Paket-Guthaben (oder ein Paketkauf läuft noch). Du kannst dein Konto löschen, sobald sie genutzt, abgelaufen oder erstattet sind.',
+      disputeWindowOpen:
+        'Eine kürzliche Sitzung kann noch beanstandet werden. Du kannst dein Konto löschen, sobald die Frist dafür abgelaufen ist.',
       playerAlreadyErased: 'Die Daten dieses Kindes wurden bereits gelöscht.',
       notAllowed: 'Dazu bist du nicht berechtigt.',
       generic: 'Etwas ist schiefgelaufen. Bitte versuche es erneut.',

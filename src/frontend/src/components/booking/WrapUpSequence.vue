@@ -278,7 +278,8 @@ const currentRating = ref('effort')
 function onTechniqueRated(v) {
   if (v !== 5) return
   setTimeout(() => {
-    if (techniqueRating.value === 5) step.value = 3
+    // Only from the ratings step: a Back pressed in the beat before must not be undone.
+    if (techniqueRating.value === 5 && step.value === 2) step.value = 3
   }, 200)
 }
 const homeworkDrillIds = ref([])
