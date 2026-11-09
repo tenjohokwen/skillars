@@ -31,6 +31,7 @@ import { pushLoginOrHardNavigate } from 'src/utils/sessionRedirect'
  *   warningThresholdSeconds: import('vue').ComputedRef<number>,
  *   handleRefresh: () => Promise<void>,
  *   handleLogout: () => Promise<void>,
+ *   endSessionLocally: () => Promise<void>,
  *   initSession: () => void,
  *   destroySession: () => void
  * }}
@@ -71,6 +72,21 @@ export function useSession() {
    * back into the app after the /login redirect (M2 from the review).
    */
   async function handleLogout() {
+    await endSessionLocally()
+
+    // skillars-deferred-125 AC3: shared helper falls back to a hard navigation if router.push does
+    // not land — see sessionRedirect.js's own comment for why router.push cannot be trusted to
+    // reject/resolve the way this call site used to assume.
+    await pushLoginOrHardNavigate(router)
+  }
+
+  /**
+   * Everything handleLogout does except the navigation (skillars-deferred-172): for pages that must end this
+   * browser's session but stay where they are, e.g. after an email-change confirm or undo, which revoked the
+   * account's sessions on the server. Without it the guest-only /login and /reset-password routes would
+   * bounce the user back into the app for up to 5 minutes.
+   */
+  async function endSessionLocally() {
     stopSessionMonitoring()
 
     document.cookie = 'user=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;'
@@ -108,11 +124,6 @@ export function useSession() {
     playerStore.resetSelfPlayerId()
     playerStore.resetPlayers()
     cleanup()
-
-    // skillars-deferred-125 AC3: shared helper falls back to a hard navigation if router.push does
-    // not land — see sessionRedirect.js's own comment for why router.push cannot be trusted to
-    // reject/resolve the way this call site used to assume.
-    await pushLoginOrHardNavigate(router)
   }
 
   /**
@@ -142,6 +153,7 @@ export function useSession() {
     warningThresholdSeconds: warningThresholdSecondsComputed,
     handleRefresh,
     handleLogout,
+    endSessionLocally,
     initSession,
     destroySession,
   }

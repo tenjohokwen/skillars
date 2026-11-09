@@ -8,6 +8,7 @@ import com.softropic.skillars.platform.security.contract.SkillarsProfileCookie;
 import com.softropic.skillars.infrastructure.security.AuthorizationException;
 import com.softropic.skillars.platform.security.contract.exception.InvalidJWTDataException;
 import com.softropic.skillars.infrastructure.security.RequestMetadataProvider;
+import io.jsonwebtoken.Claims;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import lombok.extern.slf4j.Slf4j;
@@ -77,9 +78,17 @@ public class JwtManagerImpl implements LoginTokenManager {
 
     @Override
     public void extendTtlOfToken(HttpServletRequest req, HttpServletResponse res) {
-        final Principal principal = claimsExtractor.extractPrincipal(req);
+        // skillars-deferred-179: the JWT is parsed and its signature verified ONCE here, and the four claims below are read
+        // from that one result. Each request-based ClaimsExtractor reader re-reads the potc cookie and re-verifies the
+        // HMAC, which made this fast path -- taken by every authenticated request -- verify the same token four times.
+        final String token = CookieUtil.getCookieValue(req, JWT_COOKIE_NAME);
+        if (StringUtils.isBlank(token)) {
+            throw new InvalidJWTDataException("Cannot find principal in JWT.", MISSING_JWT_PRINCIPAL);
+        }
+        final Claims parsed = claimsExtractor.extractClaims(token);
+        final Principal principal = claimsExtractor.principalFrom(parsed);
         if (principal != null && !ANONYMOUS.equals(principal.getUsername())) {
-            final Long dbRefreshToken = claimsExtractor.extractDbRefreshToken(req);
+            final Long dbRefreshToken = claimsExtractor.dbRefreshTokenFrom(parsed);
             if (dbRefreshToken != null) {
                 final Map<String, Object> claims = tokenCreator.toClaims(principal, dbRefreshToken, true, null);
                 // skillars-deferred-149 AC3 code review (2026-10-08): carried forward UNCHANGED,
@@ -89,7 +98,7 @@ public class JwtManagerImpl implements LoginTokenManager {
                 // value to carry forward; leaving it absent (rather than inventing one) means the
                 // DB-reauth comparison below treats it as predating any revocation, the safe
                 // (fail-closed) reading for a claim this story did not ship with.
-                final Long sessionIssuedAt = claimsExtractor.extractSessionIssuedAt(req);
+                final Long sessionIssuedAt = claimsExtractor.sessionIssuedAtFrom(parsed);
                 if (sessionIssuedAt != null) {
                     claims.put(SESSION_ISSUED_AT, sessionIssuedAt);
                 }
@@ -98,15 +107,7 @@ public class JwtManagerImpl implements LoginTokenManager {
                 // (OPF_SEED is the standing proof: nothing sets it and nothing noticed). Losing this one
                 // would silently turn every fast-path extension into a JWT that skips the chain-liveness
                 // check for the rest of its life.
-                //
-                // Cost, acknowledged rather than hidden: extractRefreshSessionId re-reads the potc cookie
-                // and re-parses + re-verifies the JWT, so this is a FOURTH full HMAC verification on a
-                // request that already does three (extractPrincipal, extractDbRefreshToken,
-                // extractSessionIssuedAt). It mirrors how SESSION_ISSUED_AT is already read, which is why
-                // it was written this way rather than inventing a one-off. Parsing once and threading the
-                // claims through would fix all four together and is filed as a follow-up; doing it here
-                // would mean reshaping ClaimsExtractor's API inside a security story.
-                putRefreshSessionId(claims, claimsExtractor.extractRefreshSessionId(req));
+                putRefreshSessionId(claims, claimsExtractor.refreshSessionIdFrom(parsed));
                 createAndSetJwt(res, claims);
             } else {
                 throw new InvalidJWTDataException("Cannot find dbRefreshToken in JWT.", MISSING_JWT_DB_REFRESH_TOKEN);

@@ -31,6 +31,10 @@ public class StripeCustomer {
     @Column(name = "last_payment_intent_id")
     private String lastPaymentIntentId;
 
+    /** skillars-deferred-177 (RS03i): when the Stripe-side erasure was enqueued; read by {@code StripeCustomerErasureSweep}. */
+    @Column(name = "erasure_scheduled_at")
+    private Instant erasureScheduledAt;
+
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt;
 

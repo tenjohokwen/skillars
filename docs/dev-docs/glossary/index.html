@@ -74,6 +74,7 @@
       <a href="#recap">R</a> ·
       <a href="#self-registered-player">S</a> ·
       <a href="#template">T</a> ·
+      <a href="#undo-window">U</a> ·
       <a href="#verification-status">V</a> ·
       <a href="#wrap-up">W</a>
     </p>
@@ -173,6 +174,10 @@
     <h3 id="envelope">Envelope (email)</h3>
     <p>The in-memory model of one outbound email: recipients, an <code>EmailTemplate</code>, a delivery deadline, template data and an idempotent <code>sendId</code>. It is persisted for retry and per-recipient delivery tracking, so a resend cannot double-deliver.</p>
     <p><strong>See</strong> <a href="../notification/index.html">Notification</a> · <strong>Code</strong> record <code>notification.contract.Envelope</code>, <code>EnvelopeEntity</code>, table <code>main.envelope_entity</code>, <code>EmailRetryScheduler</code></p>
+
+    <h3 id="email-change-reservation">Email-change reservation</h3>
+    <p>For the <a href="#undo-window">undo window</a> after an account's email change is confirmed, the old address stays bound to that account: no registration and no other account's email change can take it, so its owner can still undo the change. An attempt is answered as if the address were in use, and the notice goes to the reserved address itself, never to the account's current (possibly hijacked) email. Any new "is this email taken?" check must go through <code>EmailAddressAvailability</code> to see it.</p>
+    <p><strong>See</strong> <a href="../security/index.html#account-email-change">Security</a> · <strong>Code</strong> <code>EmailAddressAvailability.holderOf</code>, <code>EmailChangeRequestRepository.findReservations</code>, table <code>main.email_change_requests</code></p>
 
     <h2 id="f">F</h2>
     <h3 id="feature-gate">Feature gate</h3>
@@ -342,6 +347,11 @@
     <p>A sticky "this subject was GDPR-erased" marker that stops late writers from recreating scrubbed data. <code>main.player_profiles.development_data_erased_at</code> (V151) is checked under lock by development listeners. <code>marketplace.coach_profiles.recap_data_erased_at</code> (V166) is set inside the coach scrub and blocks recap edits. Writers must check the tombstone after taking their own row lock. A coach's account lock alone is not a reliable erasure signal.</p>
     <p><strong>See</strong> <a href="../database/index.html">Database</a>, <a href="../admin/index.html">Admin</a> · <strong>Code</strong> <code>DevelopmentDataErasureGuard</code>, <code>BookingCompletionService</code> (recap editability)</p>
 
+    <h2 id="u">U</h2>
+    <h3 id="undo-window">Undo window</h3>
+    <p>The 7 days after an email change is confirmed, during which the undo link mailed to the old address still works. While it is open the account cannot start another email change (409 <code>email.change.recentChange</code>), cannot request GDPR erasure for itself or a child (409 <code>gdpr.recentEmailChange</code>), and the old address is under an <a href="#email-change-reservation">email-change reservation</a>. An undo ends it early.</p>
+    <p><strong>See</strong> <a href="../security/index.html#account-email-change">Security</a> · <strong>Code</strong> <code>EmailChangeService.UNDO_TTL</code>, <code>EmailChangeRequestRepository.findOpenUndoWindowEnd</code>, <code>RecentEmailChangeException</code></p>
+
     <h2 id="v">V</h2>
     <h3 id="verification-status">Verification status</h3>
     <p>How far a user got through registration: <code>UNVERIFIED</code> &rarr; <code>EMAIL_VERIFIED</code> &rarr; <code>BASIC_VERIFIED</code> (phone OTP done), or <code>SUSPENDED</code>. Login requires <code>BASIC_VERIFIED</code> only when <code>security.registration.phone-otp-required</code> is true; it is seeded <code>false</code>, so email verification is enough. This describes the account, unlike the coach's <a href="#verification-tier">verification tier</a>.</p>
@@ -356,7 +366,7 @@
     <p>The coach's end-of-session form: attendance, effort/focus/technique ratings, up to two homework drills, the recap, and the <a href="#live-vs-quick">LIVE or QUICK</a> mode. Submitting it completes the booking (or moves it to pending confirmation) and publishes <code>BookingCompletedEvent</code>. That event starts the payout hold, SLU, timeline, homework and plan completion. Abandoned wrap-ups are <a href="#force-complete">force-completed</a>.</p>
     <p><strong>See</strong> <a href="../booking/index.html">Booking</a> · <strong>Code</strong> <code>BookingCompletionService.submitWrapUp</code>, <code>WrapUpRequest</code>, <code>POST /api/bookings/{id}/complete</code>, <code>WrapUpSequence.vue</code></p>
 
-    <footer class="page-footer">Last verified against master <code>4db90562</code> (2026-10-29).</footer>
+    <footer class="page-footer">Last verified against master <code>0eaf7e6b</code> (2026-11-05).</footer>
   </main>
 </div>
 <script src="../assets/mermaid.min.js"></script>

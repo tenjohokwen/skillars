@@ -48,7 +48,13 @@ export async function stubStripeCardEntry(
   if (!paymentMethodId.startsWith('pm_e2e_')) {
     throw new Error(`The stack's WireMock answers only pm_e2e_* ids, got ${paymentMethodId}`)
   }
-  const confirmed = `async () => ({ setupIntent: { status: 'succeeded', payment_method: ${JSON.stringify(paymentMethodId)} } })`
+  // The card belongs to the SetupIntent's customer, whose id ends the client secret (see cardOwnedBy): the app
+  // checks ownership before saving it (deferred-174).
+  const confirmed = `async (clientSecret) => {
+    const customer = String(clientSecret).split('_secret_')[1] || ''
+    const id = ${JSON.stringify(paymentMethodId)}.replace(/^(pm_e2e_(?:declined_)?)/, '$1' + customer.replace(/^cus_e2e_/, '') + '__')
+    return { setupIntent: { status: 'succeeded', payment_method: id } }
+  }`
   const body = STRIPE_STUB.replace(
     /confirmCardSetup: async \(\) => \(\{[^\n]*\}\),/,
     `confirmCardSetup: ${confirmed},`,

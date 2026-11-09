@@ -62,4 +62,98 @@ public interface StripeCustomerRepository extends JpaRepository<StripeCustomer, 
         + "WHERE c.parentId = :parentId AND c.stripePaymentMethodId = :attempted")
     int revertPaymentMethod(@Param("parentId") Long parentId, @Param("previous") String previous,
                             @Param("attempted") String attempted);
+
+    /**
+     * skillars-deferred-174 AC4 (RS09c): a successful pack purchase re-applies its card only while the column holds that
+     * card (the normal case: it was written before the charge) or the previous one (the resolver reverted it meanwhile).
+     * Any other value is a card saved since, which is kept. Joins the caller's transaction, which enqueues the
+     * subscription card sync with it.
+     */
+    @Modifying(flushAutomatically = true, clearAutomatically = true)
+    @Transactional
+    @Query(value = "UPDATE payment.stripe_customers SET stripe_payment_method_id = :attempted WHERE parent_id = :parentId "
+        + "AND (stripe_payment_method_id = :attempted "
+        + "OR stripe_payment_method_id IS NOT DISTINCT FROM CAST(:previous AS varchar))", nativeQuery = true)
+    int reapplyPaymentMethod(@Param("parentId") Long parentId, @Param("previous") String previous,
+                             @Param("attempted") String attempted);
+
+    /**
+     * skillars-deferred-174 AC2: the gateway's post-capture bookkeeping writes this one column. A load-and-save of the
+     * entity read before the charge would write every column back, the card included, undoing a card saved meanwhile.
+     */
+    @Modifying(flushAutomatically = true, clearAutomatically = true)
+    @Transactional
+    @Query("UPDATE StripeCustomer c SET c.lastPaymentIntentId = :intentId WHERE c.parentId = :parentId")
+    int updateLastPaymentIntentId(@Param("parentId") Long parentId, @Param("intentId") String intentId);
+
+    /**
+     * skillars-deferred-176 AC3 (RS09g): a pack purchase's card on an existing row, as a one-column UPDATE (no full-row save
+     * of an entity read earlier). Called by {@code StripeCustomerCardWrites} after it locked the row and checked the payer.
+     */
+    @Modifying(flushAutomatically = true, clearAutomatically = true)
+    @Transactional
+    @Query("UPDATE StripeCustomer c SET c.stripePaymentMethodId = :paymentMethodId WHERE c.parentId = :parentId")
+    int updatePaymentMethod(@Param("parentId") Long parentId, @Param("paymentMethodId") String paymentMethodId);
+
+    /**
+     * skillars-deferred-176 (round-1 V2): the erasure drops the saved card with an UPDATE, which takes the row lock even when
+     * the column is already NULL (a load-modify-save of an unchanged entity issues no statement). Joins the erasure
+     * transaction; no {@code clearAutomatically}, which would detach the entities that transaction is still writing.
+     */
+    @Modifying(flushAutomatically = true)
+    @Query("UPDATE StripeCustomer c SET c.stripePaymentMethodId = NULL WHERE c.parentId = :parentId")
+    int clearPaymentMethod(@Param("parentId") Long parentId);
+
+    /**
+     * skillars-deferred-177 (review round 4): a payer's first {@code stripe_customers} row, insert-only. {@code save()} on this
+     * entity (assigned id, no version) merges, so a second first-creation request that ran after the first committed would
+     * overwrite that row and orphan its Stripe customer. Returns 0 when a concurrent request's row is already there.
+     */
+    @Modifying
+    @Transactional
+    @Query(value = "INSERT INTO payment.stripe_customers (parent_id, stripe_customer_id, stripe_payment_method_id, created_at) "
+        + "VALUES (:parentId, :stripeCustomerId, :paymentMethodId, now()) ON CONFLICT (parent_id) DO NOTHING", nativeQuery = true)
+    int insertIfAbsent(@Param("parentId") Long parentId, @Param("stripeCustomerId") String stripeCustomerId,
+                       @Param("paymentMethodId") String paymentMethodId);
+
+    /**
+     * skillars-deferred-177 (RS03i): records that the Stripe-side erasure of this row is enqueued, in the transaction that
+     * enqueues it, so {@code StripeCustomerErasureSweep} leaves it alone. Same flush rules as {@link #clearPaymentMethod}.
+     */
+    @Modifying(flushAutomatically = true)
+    @Query("UPDATE StripeCustomer c SET c.erasureScheduledAt = :at WHERE c.parentId = :parentId")
+    int markErasureScheduled(@Param("parentId") Long parentId, @Param("at") java.time.Instant at);
+
+    /**
+     * skillars-deferred-177 (RS03i): payers whose account carries the GDPR erasure tombstone but whose Stripe-side erasure
+     * was never enqueued (a customer created while the erasure was in flight, whose late scheduling failed). Oldest payer
+     * id first; the sweep schedules each and the mark drops it from the next read.
+     */
+    @Query(value = "SELECT c.parent_id FROM payment.stripe_customers c JOIN main.\"user\" u ON u.id = c.parent_id "
+        + "WHERE c.erasure_scheduled_at IS NULL AND u.email = 'deleted.' || u.id || '@erased.io' "
+        + "ORDER BY c.parent_id LIMIT :limit", nativeQuery = true)
+    List<Long> findErasedPayersWithoutScheduledErasure(@Param("limit") int limit);
+
+    /**
+     * skillars-deferred-176 AC1 (RS03f): serialises the outbox handlers that write a Stripe customer's email
+     * ({@code STRIPE_CUSTOMER_EMAIL_SYNC}) or erase it ({@code STRIPE_CUSTOMER_ERASURE}). Outbox rows drain in parallel on
+     * every pod, so without it a sync that read the user before an undo or an erasure committed could reach Stripe after
+     * them. Taken inside the outbox claim transaction before the handler reads anything, and held until that transaction
+     * ends, so whichever handler runs second reads what the first one's trigger committed. Blocking: a waiter holds its
+     * outbox thread for at most the holder's Stripe call. The key must be non-blank ({@code hashtext(NULL)} locks nothing).
+     */
+    @Query(value = "SELECT pg_advisory_xact_lock(" + CUSTOMER_OUTBOX_LOCK_NAMESPACE + ", hashtext(:stripeCustomerId))",
+        nativeQuery = true)
+    void acquireCustomerOutboxLock(@Param("stripeCustomerId") String stripeCustomerId);
+
+    /**
+     * skillars-deferred-176 review round 5: the Stripe customer id only, for a handler that needs the
+     * {@link #acquireCustomerOutboxLock} key before it reads the row. A scalar query puts no entity in the persistence
+     * context, so a {@code findById} after the lock wait reads what committed meanwhile instead of a cached copy.
+     */
+    @Query("SELECT c.stripeCustomerId FROM StripeCustomer c WHERE c.parentId = :parentId")
+    Optional<String> findStripeCustomerIdByParentId(@Param("parentId") Long parentId);
+
+    /** {@code pg_advisory_xact_lock(int, int)} namespace for {@link #acquireCustomerOutboxLock} ("SCUL"). */
+    int CUSTOMER_OUTBOX_LOCK_NAMESPACE = 0x5343554C;
 }

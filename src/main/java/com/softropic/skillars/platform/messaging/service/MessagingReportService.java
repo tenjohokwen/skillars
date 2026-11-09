@@ -19,6 +19,7 @@ import com.softropic.skillars.platform.messaging.repo.MessageReportRepository;
 import com.softropic.skillars.platform.messaging.repo.MessageRepository;
 import com.softropic.skillars.platform.security.contract.exception.OperationNotAllowedException;
 import com.softropic.skillars.platform.security.repo.PlayerProfileRepository;
+import com.softropic.skillars.platform.security.service.AgePolicyService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.ApplicationEventPublisher;
@@ -42,6 +43,7 @@ public class MessagingReportService {
     private final CoachProfileRepository coachProfileRepository;
     private final PlayerProfileRepository playerProfileRepository;
     private final ApplicationEventPublisher eventPublisher;
+    private final AgePolicyService agePolicyService;
 
     public ReportResponse reportMessage(Long conversationId, Long messageId, Long reporterUserId,
                                         String role, MessageReportReason reason, String details) {
@@ -151,6 +153,16 @@ public class MessagingReportService {
             throw new OperationNotAllowedException(
                 "Caller is not a party to this conversation",
                 MessagingErrorCode.NOT_A_PARTY);
+        }
+        // The thread keeps the parent's id after the player turns 18; from then on the parent is not a
+        // party (MessagingService.requireParentReadAccess). Reporting would block an adult's chat.
+        // findMessagingPolicy: a thread whose player profile row is gone has no adult to protect, and a
+        // missing row must not cost the parent the thread (nor a report) with a not-found error.
+        if ("PARENT".equals(role) && agePolicyService.findMessagingPolicy(conv.getPlayerId())
+                .map(p -> AgeMessagingPolicy.from(p).parentIsBlocked()).orElse(false)) {
+            throw new OperationNotAllowedException(
+                "Parental access does not apply to an adult player's conversations",
+                MessagingErrorCode.PARENTAL_OVERSIGHT_NOT_APPLICABLE);
         }
     }
 }

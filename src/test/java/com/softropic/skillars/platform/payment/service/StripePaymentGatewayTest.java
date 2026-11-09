@@ -32,6 +32,8 @@ import java.util.UUID;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
@@ -158,10 +160,77 @@ class StripePaymentGatewayTest {
         stubStripeCustomer(1001L, "cus_1001");
         when(stripeClient.createPaymentIntent(any(PaymentIntentCreateParams.class), any(String.class)))
             .thenReturn(mockIntent("pi_captured"));
-        when(stripeCustomerRepository.save(any())).thenThrow(new org.springframework.dao.QueryTimeoutException("lock timeout"));
+        when(stripeCustomerRepository.updateLastPaymentIntentId(1001L, "pi_captured"))
+            .thenThrow(new org.springframework.dao.QueryTimeoutException("lock timeout"));
 
         assertThat(stripePaymentGateway.chargeAndCapture(PACK_TIER_ID, 1001L, COACH_ID, AMOUNT, "pack-1001-attempt-b"))
             .isEqualTo("pi_captured");
+    }
+
+    /** skillars-deferred-174 AC2: the post-capture bookkeeping writes one column, never the entity read before the charge. */
+    @Test
+    void chargeAndCapture_afterCapture_updatesOnlyTheLastIntentColumn() throws StripeException {
+        stubCoachAndCommission();
+        stubStripeCustomer(1001L, "cus_1001");
+        when(stripeClient.createPaymentIntent(any(PaymentIntentCreateParams.class), any(String.class)))
+            .thenReturn(mockIntent("pi_captured"));
+
+        stripePaymentGateway.chargeAndCapture(PACK_TIER_ID, 1001L, COACH_ID, AMOUNT, "pack-1001-attempt-c");
+
+        verify(stripeCustomerRepository).updateLastPaymentIntentId(1001L, "pi_captured");
+        verify(stripeCustomerRepository, never()).save(any());
+    }
+
+    /** skillars-deferred-174 AC3: a named card is charged instead of the saved one. */
+    @Test
+    void chargeAndCapture_withANamedCard_chargesThatCard_notTheSavedOne() throws StripeException {
+        stubCoachAndCommission();
+        stubStripeCustomer(1001L, "cus_1001");
+        when(stripeClient.createPaymentIntent(any(PaymentIntentCreateParams.class), any(String.class)))
+            .thenReturn(mockIntent("pi_named"));
+
+        stripePaymentGateway.chargeAndCapture(PACK_TIER_ID, 1001L, COACH_ID, AMOUNT, "pack-1001-attempt-d", "pm_named");
+
+        ArgumentCaptor<PaymentIntentCreateParams> params = ArgumentCaptor.forClass(PaymentIntentCreateParams.class);
+        verify(stripeClient).createPaymentIntent(params.capture(), any(String.class));
+        assertThat(params.getValue().getPaymentMethod()).isEqualTo("pm_named");
+        assertThat(params.getValue().getCustomer()).isEqualTo("cus_1001");
+    }
+
+    // ── skillars-deferred-174 AC1: payment method ownership ────────────────────────────────────────────────────────
+
+    @Test
+    void paymentMethodBelongsTo_sameCustomer_isTrue_otherOrNone_isFalse() throws StripeException {
+        com.stripe.model.PaymentMethod mine = new com.stripe.model.PaymentMethod();
+        mine.setCustomer("cus_mine");
+        com.stripe.model.PaymentMethod theirs = new com.stripe.model.PaymentMethod();
+        theirs.setCustomer("cus_other");
+        com.stripe.model.PaymentMethod unattached = new com.stripe.model.PaymentMethod();
+        when(stripeClient.retrievePaymentMethod("pm_mine")).thenReturn(mine);
+        when(stripeClient.retrievePaymentMethod("pm_theirs")).thenReturn(theirs);
+        when(stripeClient.retrievePaymentMethod("pm_loose")).thenReturn(unattached);
+
+        assertThat(stripePaymentGateway.paymentMethodBelongsTo("cus_mine", "pm_mine")).isTrue();
+        assertThat(stripePaymentGateway.paymentMethodBelongsTo("cus_mine", "pm_theirs")).isFalse();
+        assertThat(stripePaymentGateway.paymentMethodBelongsTo("cus_mine", "pm_loose")).isFalse();
+        assertThat(stripePaymentGateway.paymentMethodBelongsTo(null, "pm_mine")).isFalse();
+    }
+
+    @Test
+    void paymentMethodBelongsTo_anIdStripeDoesNotKnow_isFalse() throws StripeException {
+        when(stripeClient.retrievePaymentMethod("pm_ghost")).thenThrow(
+            new com.stripe.exception.InvalidRequestException("No such PaymentMethod", "id", "req_1", "resource_missing", 404, null));
+
+        assertThat(stripePaymentGateway.paymentMethodBelongsTo("cus_mine", "pm_ghost")).isFalse();
+    }
+
+    @Test
+    void paymentMethodBelongsTo_stripeUnreachable_failsClosedWithAGatewayError() throws StripeException {
+        when(stripeClient.retrievePaymentMethod("pm_mine")).thenThrow(
+            new com.stripe.exception.ApiConnectionException("timeout"));
+
+        assertThatThrownBy(() -> stripePaymentGateway.paymentMethodBelongsTo("cus_mine", "pm_mine"))
+            .isInstanceOf(PaymentGatewayException.class);
     }
 
     @Test
@@ -782,6 +851,64 @@ class StripePaymentGatewayTest {
         assertThat(state.fullyRefunded()).isFalse();
     }
 
+    // skillars-deferred-178 (RS06g): no charge object, but the intent's amount_received and its refunds still decide it
+    private com.stripe.model.Refund refund(long amount, String status) {
+        com.stripe.model.Refund r = new com.stripe.model.Refund();
+        r.setAmount(amount);
+        r.setStatus(status);
+        return r;
+    }
+
+    @Test
+    void getCaptureState_noChargeObject_butRefundedInFullByPaymentIntent_isFullyRefunded() throws StripeException {
+        PaymentIntent pi = mockIntent("pi_cs4");
+        pi.setAmountReceived(5000L);
+        when(stripeClient.retrievePaymentIntentWithLatestCharge("pi_cs4")).thenReturn(pi);
+        when(stripeClient.listRefundsForPaymentIntent("pi_cs4"))
+            .thenReturn(java.util.List.of(refund(3000L, "succeeded"), refund(2000L, "succeeded"), refund(5000L, "failed")));
+
+        com.softropic.skillars.platform.payment.contract.CaptureState state = stripePaymentGateway.getCaptureState("pi_cs4");
+
+        assertThat(state.unreadable()).isFalse();
+        assertThat(state.fullyRefunded()).isTrue();
+        assertThat(state.captured()).isEqualByComparingTo("50.00");
+    }
+
+    @Test
+    void getCaptureState_noChargeObject_notRefunded_isCaptured() throws StripeException {
+        PaymentIntent pi = mockIntent("pi_cs5");
+        pi.setAmountReceived(5000L);
+        when(stripeClient.retrievePaymentIntentWithLatestCharge("pi_cs5")).thenReturn(pi);
+        when(stripeClient.listRefundsForPaymentIntent("pi_cs5")).thenReturn(java.util.List.of());
+
+        com.softropic.skillars.platform.payment.contract.CaptureState state = stripePaymentGateway.getCaptureState("pi_cs5");
+
+        assertThat(state.unreadable()).isFalse();
+        assertThat(state.fullyRefunded()).isFalse();
+        assertThat(state.refunded()).isEqualByComparingTo("0.00");
+    }
+
+    @Test
+    void getCaptureState_noChargeObject_aRefundStillPending_staysUnreadable() throws StripeException {
+        PaymentIntent pi = mockIntent("pi_cs6");
+        pi.setAmountReceived(5000L);
+        when(stripeClient.retrievePaymentIntentWithLatestCharge("pi_cs6")).thenReturn(pi);
+        when(stripeClient.listRefundsForPaymentIntent("pi_cs6")).thenReturn(java.util.List.of(refund(5000L, "pending")));
+
+        assertThat(stripePaymentGateway.getCaptureState("pi_cs6").unreadable()).isTrue();
+    }
+
+    @Test
+    void getCaptureState_aRefundPageFailingMidway_isALookupFailure() throws StripeException {
+        PaymentIntent pi = mockIntent("pi_cs7");
+        pi.setAmountReceived(5000L);
+        when(stripeClient.retrievePaymentIntentWithLatestCharge("pi_cs7")).thenReturn(pi);
+        when(stripeClient.listRefundsForPaymentIntent("pi_cs7")).thenThrow(new IllegalStateException("page 2 failed"));
+
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> stripePaymentGateway.getCaptureState("pi_cs7"))
+            .isInstanceOf(PaymentGatewayException.class).hasMessage("payment.refundLookupFailed");
+    }
+
     @Test
     void getRefundableAmount_noChargeYet_isZero() throws StripeException {
         when(stripeClient.retrievePaymentIntentWithLatestCharge("pi_9")).thenReturn(mockIntent("pi_9"));
@@ -1003,6 +1130,75 @@ class StripePaymentGatewayTest {
         assertThat(found.get().paymentIntentId()).isEqualTo("pi_mine");
         assertThat(found.get().succeeded()).isTrue();
         assertThat(found.get().amount()).isEqualByComparingTo("50.00");
+    }
+
+    // skillars-deferred-178 (RS06h): a customer deleted at Stripe fails the list for good; the key search still finds the charge
+    @Test
+    void findChargeByIdempotencyKey_listFailsPermanently_fallsBackToTheKeySearch() throws StripeException {
+        stubStripeCustomer(1001L, "cus_deleted");
+        when(stripeClient.listPaymentIntentsForCustomer(org.mockito.ArgumentMatchers.eq("cus_deleted"),
+                org.mockito.ArgumentMatchers.anyLong()))
+            .thenThrow(new com.stripe.exception.InvalidRequestException("No such customer", "customer", "req", "resource_missing", 404, null));
+        PaymentIntent mine = mockIntent("pi_found");
+        mine.setMetadata(Map.of("chargeKey", "pack-k"));
+        when(stripeClient.searchPaymentIntentsByMetadata("chargeKey", "pack-k")).thenReturn(java.util.List.of(mine));
+
+        Optional<com.softropic.skillars.platform.payment.contract.ChargeLookup> found =
+            stripePaymentGateway.findChargeByIdempotencyKey(1001L, "pack-k", Instant.now().minusSeconds(3600));
+
+        assertThat(found).isPresent();
+        assertThat(found.get().paymentIntentId()).isEqualTo("pi_found");
+    }
+
+    @Test
+    void findChargeByIdempotencyKey_searchFallbackEmpty_isNeverAProvenAbsence() throws StripeException {
+        stubStripeCustomer(1001L, "cus_deleted");
+        when(stripeClient.listPaymentIntentsForCustomer(org.mockito.ArgumentMatchers.eq("cus_deleted"),
+                org.mockito.ArgumentMatchers.anyLong()))
+            .thenThrow(new com.stripe.exception.InvalidRequestException("No such customer", "customer", "req", "resource_missing", 404, null));
+        when(stripeClient.searchPaymentIntentsByMetadata("chargeKey", "pack-k")).thenReturn(java.util.List.of());
+
+        // review round 2: Search is eventually consistent, so "not found" there decides nothing, however old the charge
+        for (long ageSeconds : new long[] {600, 7200, 86_400 * 7}) {
+            org.assertj.core.api.Assertions.assertThatThrownBy(() ->
+                    stripePaymentGateway.findChargeByIdempotencyKey(1001L, "pack-k", Instant.now().minusSeconds(ageSeconds)))
+                .isInstanceOf(PaymentGatewayException.class).hasMessage("payment.chargeLookupFailed");
+        }
+    }
+
+    @Test
+    void findChargeByIdempotencyKey_searchFallback_takesTheNewestInTheWindow() throws StripeException {
+        stubStripeCustomer(1001L, "cus_deleted");
+        when(stripeClient.listPaymentIntentsForCustomer(org.mockito.ArgumentMatchers.eq("cus_deleted"),
+                org.mockito.ArgumentMatchers.anyLong()))
+            .thenThrow(new com.stripe.exception.InvalidRequestException("No such customer", "customer", "req", "resource_missing", 404, null));
+        long after = Instant.now().minusSeconds(3600).getEpochSecond();
+        PaymentIntent tooOld = mockIntent("pi_old");
+        tooOld.setMetadata(Map.of("chargeKey", "k"));
+        tooOld.setCreated(after - 10);
+        PaymentIntent older = mockIntent("pi_older");
+        older.setMetadata(Map.of("chargeKey", "k"));
+        older.setCreated(after + 10);
+        PaymentIntent newest = mockIntent("pi_newest");
+        newest.setMetadata(Map.of("chargeKey", "k"));
+        newest.setCreated(after + 20);
+        when(stripeClient.searchPaymentIntentsByMetadata("chargeKey", "k")).thenReturn(java.util.List.of(tooOld, newest, older));
+
+        assertThat(stripePaymentGateway.findChargeByIdempotencyKey(1001L, "k", Instant.ofEpochSecond(after)))
+            .get().extracting(com.softropic.skillars.platform.payment.contract.ChargeLookup::paymentIntentId).isEqualTo("pi_newest");
+    }
+
+    @Test
+    void findChargeByIdempotencyKey_transientListFailure_isStillALookupFailure_noSearch() throws StripeException {
+        stubStripeCustomer(1001L, "cus_1001");
+        when(stripeClient.listPaymentIntentsForCustomer(org.mockito.ArgumentMatchers.eq("cus_1001"),
+                org.mockito.ArgumentMatchers.anyLong()))
+            .thenThrow(new com.stripe.exception.ApiConnectionException("down"));
+
+        org.assertj.core.api.Assertions.assertThatThrownBy(() ->
+                stripePaymentGateway.findChargeByIdempotencyKey(1001L, "pack-k", Instant.now()))
+            .isInstanceOf(PaymentGatewayException.class).hasMessage("payment.chargeLookupFailed");
+        org.mockito.Mockito.verify(stripeClient, org.mockito.Mockito.never()).searchPaymentIntentsByMetadata(org.mockito.ArgumentMatchers.anyString(), org.mockito.ArgumentMatchers.anyString());
     }
 
     @Test

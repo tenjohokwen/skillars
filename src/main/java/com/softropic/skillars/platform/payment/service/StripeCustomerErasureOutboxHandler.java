@@ -3,6 +3,7 @@ package com.softropic.skillars.platform.payment.service;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.softropic.skillars.platform.outbox.contract.OutboxMessageHandler;
+import com.softropic.skillars.platform.payment.repo.StripeCustomerRepository;
 import com.softropic.skillars.platform.payment.service.StripeCustomerErasureOutboxSupport.StripeCustomerErasurePayload;
 import com.stripe.exception.InvalidRequestException;
 import com.stripe.exception.StripeException;
@@ -23,6 +24,10 @@ import java.io.UncheckedIOException;
  *
  * <p>Idempotent: a missing or already-deleted customer, or an already-detached card, is a no-op. A transient
  * Stripe failure throws, leaving the row for the next drain.
+ *
+ * <p>skillars-deferred-176 AC1: takes {@link StripeCustomerRepository#acquireCustomerOutboxLock} first, shared with
+ * {@link StripeCustomerEmailSyncOutboxHandler}, so an email sync that read the user before the erasure committed cannot
+ * write the real address back after this scrub.
  */
 @Slf4j
 @Component
@@ -31,10 +36,13 @@ public class StripeCustomerErasureOutboxHandler implements OutboxMessageHandler 
     private static final String RESOURCE_MISSING = "resource_missing";
 
     private final StripeClient stripeClient;
+    private final StripeCustomerRepository stripeCustomerRepository;
     private final ObjectMapper objectMapper;
 
-    public StripeCustomerErasureOutboxHandler(StripeClient stripeClient, ObjectMapper objectMapper) {
+    public StripeCustomerErasureOutboxHandler(StripeClient stripeClient, StripeCustomerRepository stripeCustomerRepository,
+                                              ObjectMapper objectMapper) {
         this.stripeClient = stripeClient;
+        this.stripeCustomerRepository = stripeCustomerRepository;
         this.objectMapper = objectMapper;
     }
 
@@ -52,6 +60,10 @@ public class StripeCustomerErasureOutboxHandler implements OutboxMessageHandler 
             throw new UncheckedIOException(e);
         }
         String customerId = p.stripeCustomerId();
+        if (customerId == null || customerId.isBlank()) {
+            return;
+        }
+        stripeCustomerRepository.acquireCustomerOutboxLock(customerId);
         try {
             Customer customer = stripeClient.retrieveCustomer(customerId);
             if (customer == null || Boolean.TRUE.equals(customer.getDeleted())) {

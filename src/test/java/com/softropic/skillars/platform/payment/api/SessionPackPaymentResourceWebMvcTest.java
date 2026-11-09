@@ -73,6 +73,7 @@ class SessionPackPaymentResourceWebMvcTest {
     @MockitoBean PackSessionService packSessionService;
     @MockitoBean StripeCustomerRepository stripeCustomerRepository;
     @MockitoBean PaymentGateway paymentGateway;
+    @MockitoBean com.softropic.skillars.platform.payment.service.StripeCustomerEmailSyncOutboxSupport stripeCustomerEmailSync;
     @MockitoBean CoachProfileRepository coachProfileRepository;
     @MockitoBean SecurityUtil securityUtil;
     @MockitoBean PaymentProperties paymentProperties;
@@ -204,6 +205,7 @@ class SessionPackPaymentResourceWebMvcTest {
         customer.setParentId(PARENT_USER_ID);
         customer.setStripeCustomerId("cus_player_test");
         when(stripeCustomerRepository.findById(PARENT_USER_ID)).thenReturn(Optional.of(customer));
+        when(paymentGateway.paymentMethodBelongsTo("cus_player_test", "pm_player_test")).thenReturn(true);
 
         mockMvc.perform(post("/api/payment/save-payment-method")
                 .contentType(MediaType.APPLICATION_JSON)
@@ -243,6 +245,80 @@ class SessionPackPaymentResourceWebMvcTest {
             .andExpect(jsonPath("$.clientSecret").value("seti_coach_secret"));
     }
 
+    // skillars-deferred-177 (RS03h): no SetupIntent for a payer erased while the request ran.
+    @Test
+    @WithMockUser(roles = "PARENT")
+    void setupIntent_existingCustomerErasedMeanwhile_422_noSetupIntent() throws Exception {
+        when(securityUtil.getCurrentCoachUserId()).thenReturn(PARENT_USER_ID);
+        StripeCustomer customer = new StripeCustomer();
+        customer.setParentId(PARENT_USER_ID);
+        customer.setStripeCustomerId("cus_erased");
+        when(stripeCustomerRepository.findById(PARENT_USER_ID)).thenReturn(Optional.of(customer));
+        org.mockito.Mockito.doThrow(new com.softropic.skillars.platform.payment.contract.exception.PaymentGatewayException(
+            "payment.accountErased")).when(sessionPackPaymentService).requirePayerLive(PARENT_USER_ID);
+
+        mockMvc.perform(post("/api/payment/setup-intent").contentType(MediaType.APPLICATION_JSON))
+            .andExpect(status().isUnprocessableEntity())
+            .andExpect(jsonPath("$.errorMsg.errorKey").value("payment.accountErased"));
+
+        org.mockito.Mockito.verify(paymentGateway, org.mockito.Mockito.never()).createSetupIntent(org.mockito.ArgumentMatchers.any());
+    }
+
+    @Test
+    @WithMockUser(roles = "PARENT")
+    void setupIntent_losingTheCreationRace_stillChecksThePayer_422_noSetupIntent() throws Exception {
+        when(securityUtil.getCurrentCoachUserId()).thenReturn(PARENT_USER_ID);
+        when(stripeCustomerRepository.findById(PARENT_USER_ID)).thenReturn(Optional.empty());
+        when(paymentGateway.createStripeCustomer(PARENT_USER_ID)).thenReturn("cus_loser");
+        when(stripeCustomerRepository.insertIfAbsent(PARENT_USER_ID, "cus_loser", null)).thenReturn(0); // a concurrent row won
+        org.mockito.Mockito.doThrow(new com.softropic.skillars.platform.payment.contract.exception.PaymentGatewayException(
+            "payment.accountErased")).when(sessionPackPaymentService).requirePayerLive(PARENT_USER_ID);
+
+        mockMvc.perform(post("/api/payment/setup-intent").contentType(MediaType.APPLICATION_JSON))
+            .andExpect(status().isUnprocessableEntity());
+
+        org.mockito.Mockito.verify(paymentGateway, org.mockito.Mockito.never()).createSetupIntent(org.mockito.ArgumentMatchers.any());
+        // review round 3: the loser's own Stripe customer is named by no row, so it is erased at Stripe
+        org.mockito.Mockito.verify(sessionPackPaymentService).discardUnrecordedCustomer("cus_loser");
+    }
+
+    @Test
+    @WithMockUser(roles = "PARENT")
+    void setupIntent_firstCustomerCreatedWhileErased_422_noSetupIntent() throws Exception {
+        when(securityUtil.getCurrentCoachUserId()).thenReturn(PARENT_USER_ID);
+        when(stripeCustomerRepository.findById(PARENT_USER_ID)).thenReturn(Optional.empty());
+        when(stripeCustomerEmailSync.currentEmail(PARENT_USER_ID)).thenReturn("before@example.com");
+        when(paymentGateway.createStripeCustomer(PARENT_USER_ID)).thenReturn("cus_new");
+        when(stripeCustomerRepository.insertIfAbsent(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any())).thenReturn(1);
+        when(stripeCustomerEmailSync.syncIfEmailChangedSince(PARENT_USER_ID, "before@example.com")).thenReturn(true);
+
+        mockMvc.perform(post("/api/payment/setup-intent").contentType(MediaType.APPLICATION_JSON))
+            .andExpect(status().isUnprocessableEntity());
+
+        org.mockito.Mockito.verify(paymentGateway, org.mockito.Mockito.never()).createSetupIntent(org.mockito.ArgumentMatchers.any());
+    }
+
+    // skillars-deferred-176 AC2 (RS03e): the email is read before the customer is created and compared after its row is saved.
+    @Test
+    @WithMockUser(roles = "PARENT")
+    void setupIntent_firstCustomer_checksForAnEmailChangeMadeDuringCreation() throws Exception {
+        when(securityUtil.getCurrentCoachUserId()).thenReturn(PARENT_USER_ID);
+        when(stripeCustomerRepository.findById(PARENT_USER_ID)).thenReturn(Optional.empty());
+        when(stripeCustomerEmailSync.currentEmail(PARENT_USER_ID)).thenReturn("before@example.com");
+        when(paymentGateway.createStripeCustomer(PARENT_USER_ID)).thenReturn("cus_new");
+        when(stripeCustomerRepository.insertIfAbsent(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any())).thenReturn(1);
+        when(paymentGateway.createSetupIntent("cus_new")).thenReturn("seti_new");
+
+        mockMvc.perform(post("/api/payment/setup-intent").contentType(MediaType.APPLICATION_JSON))
+            .andExpect(status().isOk());
+
+        org.mockito.InOrder order = org.mockito.Mockito.inOrder(stripeCustomerEmailSync, paymentGateway, stripeCustomerRepository);
+        order.verify(stripeCustomerEmailSync).currentEmail(PARENT_USER_ID);
+        order.verify(paymentGateway).createStripeCustomer(PARENT_USER_ID);
+        order.verify(stripeCustomerRepository).insertIfAbsent(PARENT_USER_ID, "cus_new", null);
+        order.verify(stripeCustomerEmailSync).syncIfEmailChangedSince(PARENT_USER_ID, "before@example.com");
+    }
+
     @Test
     @WithMockUser(roles = "COACH")
     void savePaymentMethod_coachRole_returns204() throws Exception {
@@ -251,6 +327,7 @@ class SessionPackPaymentResourceWebMvcTest {
         customer.setParentId(PARENT_USER_ID);
         customer.setStripeCustomerId("cus_coach_test");
         when(stripeCustomerRepository.findById(PARENT_USER_ID)).thenReturn(Optional.of(customer));
+        when(paymentGateway.paymentMethodBelongsTo("cus_coach_test", "pm_coach_test")).thenReturn(true);
 
         mockMvc.perform(post("/api/payment/save-payment-method")
                 .contentType(MediaType.APPLICATION_JSON)
@@ -269,6 +346,7 @@ class SessionPackPaymentResourceWebMvcTest {
         customer.setParentId(PARENT_USER_ID);
         customer.setStripeCustomerId("cus_coach_test");
         when(stripeCustomerRepository.findById(PARENT_USER_ID)).thenReturn(Optional.of(customer));
+        when(paymentGateway.paymentMethodBelongsTo("cus_coach_test", "pm_sync_test")).thenReturn(true);
 
         mockMvc.perform(post("/api/payment/save-payment-method")
                 .contentType(MediaType.APPLICATION_JSON)
@@ -282,21 +360,66 @@ class SessionPackPaymentResourceWebMvcTest {
             .createStripeCustomer(org.mockito.ArgumentMatchers.any());
     }
 
+    // skillars-deferred-174 AC1 (RS09b): only a card Stripe reports attached to the caller's own customer is saved.
     @Test
     @WithMockUser(roles = "COACH")
-    void savePaymentMethod_firstCard_createsStripeCustomerThenSchedulesSync() throws Exception {
+    void savePaymentMethod_noStripeCustomer_returns400_createsNothing() throws Exception {
         when(securityUtil.getCurrentCoachUserId()).thenReturn(PARENT_USER_ID);
         when(stripeCustomerRepository.findById(PARENT_USER_ID)).thenReturn(Optional.empty());
-        when(paymentGateway.createStripeCustomer(PARENT_USER_ID)).thenReturn("cus_new");
 
         mockMvc.perform(post("/api/payment/save-payment-method")
                 .contentType(MediaType.APPLICATION_JSON)
                 .content("{\"paymentMethodId\":\"pm_first\"}"))
-            .andExpect(status().isNoContent());
+            .andExpect(status().isBadRequest())
+            .andExpect(r -> org.assertj.core.api.Assertions.assertThat(
+                ((org.springframework.web.server.ResponseStatusException) r.getResolvedException()).getReason())
+                .isEqualTo("payment.paymentMethodNotOwned"));
 
-        org.mockito.Mockito.verify(stripeCustomerRepository).save(org.mockito.ArgumentMatchers.argThat(
-            sc -> "cus_new".equals(sc.getStripeCustomerId()) && PARENT_USER_ID.equals(sc.getParentId())));
-        org.mockito.Mockito.verify(subscriptionService).savePaymentMethodAndScheduleSync(PARENT_USER_ID, "pm_first");
+        org.mockito.Mockito.verify(paymentGateway, org.mockito.Mockito.never())
+            .createStripeCustomer(org.mockito.ArgumentMatchers.any());
+        org.mockito.Mockito.verify(stripeCustomerRepository, org.mockito.Mockito.never())
+            .save(org.mockito.ArgumentMatchers.any());
+        org.mockito.Mockito.verifyNoInteractions(subscriptionService, sessionPackPaymentService);
+    }
+
+    @Test
+    @WithMockUser(roles = "PARENT")
+    void savePaymentMethod_aCardOfAnotherCustomerOrUnattached_returns400_noSaveNoFingerprint() throws Exception {
+        when(securityUtil.getCurrentCoachUserId()).thenReturn(PARENT_USER_ID);
+        StripeCustomer customer = new StripeCustomer();
+        customer.setParentId(PARENT_USER_ID);
+        customer.setStripeCustomerId("cus_mine");
+        when(stripeCustomerRepository.findById(PARENT_USER_ID)).thenReturn(Optional.of(customer));
+        when(paymentGateway.paymentMethodBelongsTo("cus_mine", "pm_foreign")).thenReturn(false);
+
+        mockMvc.perform(post("/api/payment/save-payment-method")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"paymentMethodId\":\"pm_foreign\"}"))
+            .andExpect(status().isBadRequest())
+            .andExpect(r -> org.assertj.core.api.Assertions.assertThat(
+                ((org.springframework.web.server.ResponseStatusException) r.getResolvedException()).getReason())
+                .isEqualTo("payment.paymentMethodNotOwned"));
+
+        org.mockito.Mockito.verifyNoInteractions(subscriptionService, sessionPackPaymentService);
+    }
+
+    @Test
+    @WithMockUser(roles = "PARENT")
+    void savePaymentMethod_stripeDownDuringTheOwnershipCheck_returns422_savesNothing() throws Exception {
+        when(securityUtil.getCurrentCoachUserId()).thenReturn(PARENT_USER_ID);
+        StripeCustomer customer = new StripeCustomer();
+        customer.setParentId(PARENT_USER_ID);
+        customer.setStripeCustomerId("cus_mine");
+        when(stripeCustomerRepository.findById(PARENT_USER_ID)).thenReturn(Optional.of(customer));
+        when(paymentGateway.paymentMethodBelongsTo("cus_mine", "pm_mine"))
+            .thenThrow(new com.softropic.skillars.platform.payment.contract.exception.PaymentGatewayException("payment.lifecycleFailure"));
+
+        mockMvc.perform(post("/api/payment/save-payment-method")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"paymentMethodId\":\"pm_mine\"}"))
+            .andExpect(status().isUnprocessableEntity());
+
+        org.mockito.Mockito.verifyNoInteractions(subscriptionService, sessionPackPaymentService);
     }
 
     @Test
@@ -324,12 +447,13 @@ class SessionPackPaymentResourceWebMvcTest {
         when(securityUtil.getCurrentCoachUserId()).thenReturn(PARENT_USER_ID);
         java.util.UUID packTierId = java.util.UUID.randomUUID();
         when(sessionPackPaymentService.purchasePack(eq(PARENT_USER_ID), eq(packTierId), eq(1L), any(),
-                org.mockito.ArgumentMatchers.isNull()))
+                eq("player-attempt-0001")))
             .thenReturn(new SessionPackPurchaseResponse(
                 java.util.UUID.randomUUID(), packTierId, "Starter", 5, 5, new BigDecimal("20.00"),
                 Instant.now().plusSeconds(3600), "pi_test", 1L, java.util.UUID.randomUUID(), null, "ACTIVE", null, null, 90));
 
         mockMvc.perform(post("/api/payment/session-packs/purchase")
+                .header("Idempotency-Key", "player-attempt-0001")
                 .contentType(MediaType.APPLICATION_JSON)
                 .content("{\"packTierId\":\"" + packTierId + "\",\"playerId\":1}"))
             .andExpect(status().isCreated());
@@ -363,6 +487,7 @@ class SessionPackPaymentResourceWebMvcTest {
                 "payment.coachStripeNotConfigured"));
 
         mockMvc.perform(post("/api/payment/session-packs/purchase")
+                .header("Idempotency-Key", "attempt-0002")
                 .contentType(MediaType.APPLICATION_JSON)
                 .content("{\"packTierId\":\"" + packTierId + "\",\"playerId\":1}"))
             .andExpect(status().isUnprocessableEntity())
@@ -479,9 +604,45 @@ class SessionPackPaymentResourceWebMvcTest {
     @WithMockUser(roles = "PARENT")
     void purchaseSessionPack_malformedPaymentMethodId_returns400() throws Exception {
         mockMvc.perform(post("/api/payment/session-packs/purchase")
+                .header("Idempotency-Key", "attempt-0003")
                 .contentType(MediaType.APPLICATION_JSON)
                 .content("{\"packTierId\":\"" + java.util.UUID.randomUUID() + "\",\"playerId\":7,\"paymentMethodId\":\"tok_x\"}"))
             .andExpect(status().isBadRequest());
+        org.mockito.Mockito.verifyNoInteractions(sessionPackPaymentService);
+    }
+
+    /** skillars-deferred-180 (RS06c): a purchase without a client idempotency key is refused before the service. */
+    @Test
+    @WithMockUser(roles = "PARENT")
+    void purchaseSessionPack_withoutIdempotencyKey_returns400() throws Exception {
+        mockMvc.perform(post("/api/payment/session-packs/purchase")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"packTierId\":\"" + java.util.UUID.randomUUID() + "\",\"playerId\":1}"))
+            .andExpect(status().isBadRequest())
+            .andExpect(r -> org.assertj.core.api.Assertions.assertThat(
+                ((org.springframework.web.server.ResponseStatusException) r.getResolvedException()).getReason())
+                .isEqualTo("payment.idempotencyKeyRequired"))
+            // A ResponseStatusException carries its code in errorMsg.message (errorKey is generic.requestError), which is
+            // where the SPA's errorCode() reads it.
+            .andExpect(jsonPath("$.errorMsg.message").value("payment.idempotencyKeyRequired"));
+        org.mockito.Mockito.verifyNoInteractions(sessionPackPaymentService);
+    }
+
+    /** skillars-deferred-180 (RS06c): a blank key counts as missing. */
+    @Test
+    @WithMockUser(roles = "PARENT")
+    void purchaseSessionPack_blankIdempotencyKey_returns400() throws Exception {
+        mockMvc.perform(post("/api/payment/session-packs/purchase")
+                .header("Idempotency-Key", "   ")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"packTierId\":\"" + java.util.UUID.randomUUID() + "\",\"playerId\":1}"))
+            .andExpect(status().isBadRequest())
+            .andExpect(r -> org.assertj.core.api.Assertions.assertThat(
+                ((org.springframework.web.server.ResponseStatusException) r.getResolvedException()).getReason())
+                .isEqualTo("payment.idempotencyKeyRequired"))
+            // A ResponseStatusException carries its code in errorMsg.message (errorKey is generic.requestError), which is
+            // where the SPA's errorCode() reads it.
+            .andExpect(jsonPath("$.errorMsg.message").value("payment.idempotencyKeyRequired"));
         org.mockito.Mockito.verifyNoInteractions(sessionPackPaymentService);
     }
 }

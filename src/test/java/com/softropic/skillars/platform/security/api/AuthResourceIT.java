@@ -1508,43 +1508,40 @@ class AuthResourceIT extends AbstractIntegrationTest {
     }
 
     /**
-     * AC5 plus the round-2 repair, which together decide what a claimless JWT can still do.
+     * The round-2 repair plus skillars-deferred-180's fail-closed flip, which together decide what a claimless JWT
+     * can still do.
      *
-     * <p>A JWT with no {@code rtsid} claim is skipped rather than refused, because neither mint path can
-     * invent the claim and failing closed would sign out every live session the moment this deploys. But
-     * the filter first tries to REPAIR the claim from the request's own {@code rtkn} cookie — a rolling
-     * deploy (or a rollback) can strip the claim from a post-deploy token, since an instance on the
-     * previous release re-signs without a claim it does not know about, and without the repair that
-     * session would never be checked again.
-     *
-     * <p>So the gap is narrower than "any claimless JWT survives": it survives only when it arrives
-     * WITHOUT the cookie that would identify its chain. Both halves are asserted here, because the
-     * difference between them is the whole value of the repair.
+     * <p>The filter first tries to REPAIR a missing {@code rtsid} claim from the request's own {@code rtkn} cookie: a
+     * rolling deploy (or a rollback) can strip the claim from a post-deploy token, since an instance on the previous
+     * release re-signs without a claim it does not know about. With the cookie, the claimless token is checked like any
+     * other. Without it there is nothing to derive from, and since skillars-deferred-180 the token is refused: that is the
+     * shape of a thief who copied the {@code potc} (and the browser-binding cookies) and left the {@code rtkn} out.
      */
     @Test
-    void logout_andAClaimlessJwt_isRepairedFromTheCookieButFailsOpenWithoutIt() {
+    void aClaimlessJwt_isRepairedFromItsCookie_andRefusedWithoutIt() {
         ResponseEntity<Map> device = login(COACH_EMAIL);
         String rtkn = extractCookieValue(device, "rtkn");
         String legacyJwt = withoutRefreshSessionClaim(extractCookieValue(device, "potc"));
 
+        // (a) Live chain, with its rtkn: repaired and accepted.
+        assertThat(accountGetStatus(cookiesWithJwt(device, legacyJwt)))
+            .as("a claimless JWT presented with its own live rtkn must be repaired and pass")
+            .isEqualTo(HttpStatus.OK);
+
+        // (b) Same live chain, no rtkn: refused even though the session is still live.
+        assertThat(accountGetStatus(cookiesWithJwtButNoRtkn(device, legacyJwt)))
+            .as("with no rtkn to derive the chain from, the chain check fails closed. Note every OTHER cookie is "
+                + "kept: dropping bcookie/ION would fail isTokenFixed instead and this assertion would pass for "
+                + "the wrong reason")
+            .isEqualTo(HttpStatus.UNAUTHORIZED);
+
         httpTestClient.makeHttpRequest(
             baseUrl() + LOGOUT_ENDPOINT, HttpMethod.POST, null, cookieHeaders(rtkn), Map.class);
 
-        // (a) With the rtkn cookie the chain id is re-derived, the revoked chain is found, and the
-        // claimless JWT is refused — the rolling-deploy case is repaired rather than permanently exempt.
+        // (c) After logout, with the rtkn: the re-derived chain is revoked, so refused.
         assertThat(accountGetStatus(cookiesWithJwt(device, legacyJwt)))
-            .as("a claimless JWT presented with its own rtkn must be repaired and refused")
+            .as("a claimless JWT presented with its own rtkn after logout must be repaired and refused")
             .isEqualTo(HttpStatus.UNAUTHORIZED);
-
-        // (b) Without any rtkn cookie there is nothing to derive from, and AC5's fail-open stands. This is
-        // the documented residual: a potc stolen before the rollout, presented on its own, is not killed.
-        // The flip to fail-closed is an owner decision filed in deferred-work.md; when it happens, this
-        // half is the assertion that must change.
-        assertThat(accountGetStatus(cookiesWithJwtButNoRtkn(device, legacyJwt)))
-            .as("with no rtkn to derive from, the chain check is skipped rather than failed (AC5). Note "
-                + "every OTHER cookie is kept: dropping bcookie/ION would fail isTokenFixed instead and "
-                + "this assertion would pass for the wrong reason")
-            .isEqualTo(HttpStatus.OK);
     }
 
     /**

@@ -20,7 +20,9 @@ test.describe('E · Payment — deterministic Stripe tier', () => {
           'POST',
           '/payment/setup-intent',
         )
-        expect(body.clientSecret).toMatch(/^seti_e2e_[A-Za-z0-9]{14}_secret_e2e$/)
+        expect(body.clientSecret).toMatch(
+          /^seti_e2e_[A-Za-z0-9]{14}_secret_cus_e2e_[A-Za-z0-9]{14}$/,
+        )
       } finally {
         await session.dispose()
       }

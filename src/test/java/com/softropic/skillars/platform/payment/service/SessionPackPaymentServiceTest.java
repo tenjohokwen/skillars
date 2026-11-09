@@ -57,6 +57,9 @@ class SessionPackPaymentServiceTest {
     @Mock PessimisticLockRetryer lockRetryer;
     @Mock RefundReconciliationService refundReconciliationService;
     @Mock SubscriptionService subscriptionService;
+    @Mock StripeCustomerEmailSyncOutboxSupport stripeCustomerEmailSync;
+    @Mock StripeCustomerCardWrites stripeCustomerCardWrites;
+    @Mock StripeCustomerErasureOutboxSupport stripeCustomerErasureOutboxSupport;
     @Mock com.softropic.skillars.platform.security.service.AgeVerificationService ageVerificationService;
     @Mock com.softropic.skillars.platform.payment.repo.SessionPackPurchaseAttemptRepository attemptRepository;
     @Mock com.softropic.skillars.platform.payment.repo.StripeRefundFailureRepository refundFailureRepository;
@@ -83,6 +86,13 @@ class SessionPackPaymentServiceTest {
             return a;
         });
         lenient().when(attemptRepository.transition(any(), any(), any(), any())).thenReturn(true);
+        // skillars-deferred-174: a named card is the payer's own unless a test says otherwise, and the success-path card
+        // re-apply finds the column as the purchase left it.
+        lenient().when(paymentGateway.paymentMethodBelongsTo(any(), any())).thenReturn(true);
+        // skillars-deferred-177 (RS03h): the payer is live unless a test erases them.
+        lenient().when(stripeCustomerCardWrites.payerLive(any())).thenReturn(true);
+        lenient().when(stripeCustomerCardWrites.writeCardIfPayerLive(any(), any())).thenReturn(true);
+        lenient().when(subscriptionService.reapplyPaymentMethodAndScheduleSync(any(), any(), any())).thenReturn(true);
         lenient().when(lockRetryer.withBoundedRetry(anyString(), any()))
             .thenAnswer(inv -> ((java.util.function.Supplier<?>) inv.getArgument(1)).get());
         // fix/payment-pack-integrity: purchasePack checks the tier's coach is bookable.
@@ -110,7 +120,7 @@ class SessionPackPaymentServiceTest {
 
         assertThatThrownBy(() -> sessionPackPaymentService.purchasePack(PARENT_ID, TIER_ID, PLAYER_ID, "pm_test"))
             .isInstanceOf(OperationNotAllowedException.class);
-        verify(paymentGateway, never()).chargeAndCapture(any(), any(), any(), any(), any());
+        verify(paymentGateway, never()).chargeAndCapture(any(), any(), any(), any(), any(), any());
         verify(stripeCustomerRepository, never()).save(any());
     }
 
@@ -123,6 +133,8 @@ class SessionPackPaymentServiceTest {
         when(playerProfileRepository.findById(PLAYER_ID)).thenReturn(Optional.of(player));
         when(sessionPackTierRepository.findById(TIER_ID)).thenReturn(Optional.of(makeActiveTier()));
         when(paymentGateway.isCoachPaymentReady(COACH_ID)).thenReturn(true);
+        // The card is the payer's (deferred-174 checks that first): the erasure hold is what refuses.
+        when(stripeCustomerRepository.findById(PARENT_ID)).thenReturn(Optional.of(existingCustomerWithCard("pm_test")));
         when(bookingRepository.existsInFlightCoachErasureRequest(COACH_ID)).thenReturn(true);
 
         assertThatThrownBy(() -> sessionPackPaymentService.purchasePack(PARENT_ID, TIER_ID, PLAYER_ID, "pm_test"))
@@ -150,7 +162,7 @@ class SessionPackPaymentServiceTest {
         verify(paymentGateway, never()).createStripeCustomer(any());
         verify(stripeCustomerRepository, never()).save(any());
         verify(attemptRepository, never()).saveAndFlush(any());
-        verify(paymentGateway, never()).chargeAndCapture(any(), any(), any(), any(), any());
+        verify(paymentGateway, never()).chargeAndCapture(any(), any(), any(), any(), any(), any());
     }
 
     /** A returning payer who sent a new card: the saved card is left as it was. */
@@ -170,9 +182,9 @@ class SessionPackPaymentServiceTest {
             .hasMessageContaining("payment.coachStripeNotConfigured");
         assertThat(customer.getStripePaymentMethodId()).isEqualTo("pm_old");
         verify(stripeCustomerRepository, never()).save(any());
-        verify(subscriptionService, never()).savePaymentMethodAndScheduleSync(any(), any());
+        verify(subscriptionService, never()).reapplyPaymentMethodAndScheduleSync(any(), any(), any());
         verify(attemptRepository, never()).saveAndFlush(any());
-        verify(paymentGateway, never()).chargeAndCapture(any(), any(), any(), any(), any());
+        verify(paymentGateway, never()).chargeAndCapture(any(), any(), any(), any(), any(), any());
     }
 
     private StripeCustomer existingCustomerWithCard(String card) {
@@ -191,7 +203,7 @@ class SessionPackPaymentServiceTest {
         when(sessionPackTierRepository.findById(TIER_ID)).thenReturn(Optional.of(tier));
         when(stripeCustomerRepository.findById(PARENT_ID))
             .thenAnswer(inv -> Optional.of(existingCustomerWithCard(savedCard)));
-        lenient().when(paymentGateway.chargeAndCapture(eq(TIER_ID), eq(PARENT_ID), eq(COACH_ID), eq(tier.getTotalPrice()), anyString()))
+        lenient().when(paymentGateway.chargeAndCapture(eq(TIER_ID), eq(PARENT_ID), eq(COACH_ID), eq(tier.getTotalPrice()), anyString(), any()))
             .thenReturn("pi_test");
         lenient().when(sessionPackPurchaseRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
     }
@@ -203,7 +215,7 @@ class SessionPackPaymentServiceTest {
 
         sessionPackPaymentService.purchasePack(PARENT_ID, TIER_ID, PLAYER_ID, "pm_new");
 
-        verify(subscriptionService).savePaymentMethodAndScheduleSync(PARENT_ID, "pm_new");
+        verify(subscriptionService).reapplyPaymentMethodAndScheduleSync(PARENT_ID, "pm_old", "pm_new");
     }
 
     /** fix/pack-expiry-size-tiers: expiry is purchase + the size tier's days (5 sessions → tier2), not 60. */
@@ -238,31 +250,42 @@ class SessionPackPaymentServiceTest {
 
         sessionPackPaymentService.purchasePack(PARENT_ID, TIER_ID, PLAYER_ID, "pm_same");
 
-        verify(subscriptionService, never()).savePaymentMethodAndScheduleSync(any(), any());
+        verify(subscriptionService, never()).reapplyPaymentMethodAndScheduleSync(any(), any(), any());
     }
 
     @Test
     void purchasePack_newCardButTheChargeFails_noSync() {
         SessionPackTier tier = makeActiveTier();
         stubPurchaseWithExistingCustomer(tier, "pm_old");
-        when(paymentGateway.chargeAndCapture(eq(TIER_ID), eq(PARENT_ID), eq(COACH_ID), eq(tier.getTotalPrice()), anyString()))
+        when(paymentGateway.chargeAndCapture(eq(TIER_ID), eq(PARENT_ID), eq(COACH_ID), eq(tier.getTotalPrice()), anyString(), any()))
             .thenThrow(new com.softropic.skillars.platform.payment.contract.exception.PaymentGatewayException("payment.declined"));
 
         assertThatThrownBy(() -> sessionPackPaymentService.purchasePack(PARENT_ID, TIER_ID, PLAYER_ID, "pm_new"))
             .isInstanceOf(com.softropic.skillars.platform.payment.contract.exception.PaymentGatewayException.class);
 
-        verify(subscriptionService, never()).savePaymentMethodAndScheduleSync(any(), any());
+        verify(subscriptionService, never()).reapplyPaymentMethodAndScheduleSync(any(), any(), any());
     }
 
     @Test
     void purchasePack_firstEverCustomer_noSubscriptionToSync() {
         SessionPackTier tier = makeActiveTier();
         stubHappyPathUntilPersist(tier);
+        // skillars-deferred-174 AC1: a payer with no Stripe customer cannot name a card, so a first purchase names none
+        when(stripeCustomerRepository.findById(PARENT_ID)).thenReturn(Optional.empty());
+        when(paymentGateway.createStripeCustomer(PARENT_ID)).thenReturn("cus_test");
         when(sessionPackPurchaseRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
 
-        sessionPackPaymentService.purchasePack(PARENT_ID, TIER_ID, PLAYER_ID, "pm_test");
+        when(stripeCustomerEmailSync.currentEmail(PARENT_ID)).thenReturn("before@example.com");
 
-        verify(subscriptionService, never()).savePaymentMethodAndScheduleSync(any(), any());
+        sessionPackPaymentService.purchasePack(PARENT_ID, TIER_ID, PLAYER_ID, null);
+
+        verify(subscriptionService, never()).reapplyPaymentMethodAndScheduleSync(any(), any(), any());
+        // skillars-deferred-176 AC2 (RS03e): an email change made while the customer was created is caught after the insert.
+        org.mockito.InOrder order = org.mockito.Mockito.inOrder(stripeCustomerEmailSync, paymentGateway, stripeCustomerRepository);
+        order.verify(stripeCustomerEmailSync).currentEmail(PARENT_ID);
+        order.verify(paymentGateway).createStripeCustomer(PARENT_ID);
+        order.verify(stripeCustomerRepository).insertIfAbsent(eq(PARENT_ID), eq("cus_test"), any());
+        order.verify(stripeCustomerEmailSync).syncIfEmailChangedSince(PARENT_ID, "before@example.com");
     }
 
     private static final Long PARENT_ID = 8001L;
@@ -316,17 +339,17 @@ class SessionPackPaymentServiceTest {
         when(sessionPackTierRepository.findById(TIER_ID)).thenReturn(Optional.of(tier));
         when(stripeCustomerRepository.findById(selfPlayerUserId)).thenReturn(Optional.empty());
         when(paymentGateway.createStripeCustomer(selfPlayerUserId)).thenReturn("cus_test");
-        when(stripeCustomerRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
-        when(paymentGateway.chargeAndCapture(eq(TIER_ID), eq(selfPlayerUserId), eq(COACH_ID), eq(tier.getTotalPrice()), anyString()))
+        when(stripeCustomerRepository.insertIfAbsent(any(), any(), any())).thenReturn(1);
+        when(paymentGateway.chargeAndCapture(eq(TIER_ID), eq(selfPlayerUserId), eq(COACH_ID), eq(tier.getTotalPrice()), anyString(), any()))
             .thenReturn("pi_test");
         when(sessionPackPurchaseRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
 
         SessionPackPurchaseResponse response =
-            sessionPackPaymentService.purchasePack(selfPlayerUserId, TIER_ID, PLAYER_ID, "pm_test");
+            sessionPackPaymentService.purchasePack(selfPlayerUserId, TIER_ID, PLAYER_ID, null);
 
         assertThat(response).isNotNull();
         assertThat(response.remainingSessions()).isEqualTo(tier.getSessionCount());
-        verify(paymentGateway).chargeAndCapture(eq(TIER_ID), eq(selfPlayerUserId), eq(COACH_ID), eq(tier.getTotalPrice()), anyString());
+        verify(paymentGateway).chargeAndCapture(eq(TIER_ID), eq(selfPlayerUserId), eq(COACH_ID), eq(tier.getTotalPrice()), anyString(), any());
     }
 
     /** Deferred-81 AC4: someone else calling with a self-registered player's id must still be refused. */
@@ -351,10 +374,10 @@ class SessionPackPaymentServiceTest {
         player.setUserId(PARENT_ID);
         when(playerProfileRepository.findById(PLAYER_ID)).thenReturn(Optional.of(player));
         when(sessionPackTierRepository.findById(TIER_ID)).thenReturn(Optional.of(tier));
-        when(stripeCustomerRepository.findById(PARENT_ID)).thenReturn(Optional.empty());
-        when(paymentGateway.createStripeCustomer(PARENT_ID)).thenReturn("cus_test");
-        when(stripeCustomerRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
-        when(paymentGateway.chargeAndCapture(eq(TIER_ID), eq(PARENT_ID), eq(COACH_ID), eq(tier.getTotalPrice()), anyString()))
+        // skillars-deferred-174 AC1: a named card needs the payer's own Stripe customer, so the happy path has one.
+        when(stripeCustomerRepository.findById(PARENT_ID)).thenAnswer(inv -> Optional.of(existingCustomerWithCard(null)));
+        lenient().when(stripeCustomerRepository.insertIfAbsent(any(), any(), any())).thenReturn(1);
+        when(paymentGateway.chargeAndCapture(eq(TIER_ID), eq(PARENT_ID), eq(COACH_ID), eq(tier.getTotalPrice()), anyString(), any()))
             .thenReturn("pi_test");
     }
 
@@ -420,7 +443,7 @@ class SessionPackPaymentServiceTest {
         sessionPackPaymentService.purchasePack(PARENT_ID, TIER_ID, PLAYER_ID, "pm_test", "attempt-0001");
 
         verify(paymentGateway).chargeAndCapture(TIER_ID, PARENT_ID, COACH_ID, tier.getTotalPrice(),
-            "pack-" + PARENT_ID + "-attempt-0001");
+            "pack-" + PARENT_ID + "-attempt-0001", "pm_test");
     }
 
     @Test
@@ -434,7 +457,7 @@ class SessionPackPaymentServiceTest {
 
         org.mockito.ArgumentCaptor<String> keys = org.mockito.ArgumentCaptor.forClass(String.class);
         verify(paymentGateway, org.mockito.Mockito.times(2)).chargeAndCapture(
-            eq(TIER_ID), eq(PARENT_ID), eq(COACH_ID), eq(tier.getTotalPrice()), keys.capture());
+            eq(TIER_ID), eq(PARENT_ID), eq(COACH_ID), eq(tier.getTotalPrice()), keys.capture(), any());
         assertThat(keys.getAllValues()).allMatch(k -> k.startsWith("pack-" + PARENT_ID + "-")).doesNotHaveDuplicates();
     }
 
@@ -507,7 +530,7 @@ class SessionPackPaymentServiceTest {
         assertThatThrownBy(() -> sessionPackPaymentService.purchasePack(PARENT_ID, TIER_ID, PLAYER_ID, "pm_test", "bad key!"))
             .isInstanceOf(org.springframework.web.server.ResponseStatusException.class)
             .hasMessageContaining("payment.invalidIdempotencyKey");
-        verify(paymentGateway, never()).chargeAndCapture(any(), any(), any(), any(), any());
+        verify(paymentGateway, never()).chargeAndCapture(any(), any(), any(), any(), any(), any());
     }
 
     private SessionPackPurchase existingPurchase() {
@@ -767,7 +790,7 @@ class SessionPackPaymentServiceTest {
     void purchasePack_cardDecline_marksNoCharge_revertsTheCardFirst_andSignalsNoChargeMade() {
         SessionPackTier tier = makeActiveTier();
         stubPurchaseWithExistingCustomer(tier, "pm_old");
-        when(paymentGateway.chargeAndCapture(any(), any(), any(), any(), anyString()))
+        when(paymentGateway.chargeAndCapture(any(), any(), any(), any(), anyString(), any()))
             .thenThrow(new PaymentGatewayException("payment.lifecycleFailure"));
 
         assertThatThrownBy(() -> sessionPackPaymentService.purchasePack(PARENT_ID, TIER_ID, PLAYER_ID, "pm_new", KEY))
@@ -778,13 +801,78 @@ class SessionPackPaymentServiceTest {
         order.verify(stripeCustomerRepository).revertPaymentMethod(PARENT_ID, "pm_old", "pm_new");
         order.verify(attemptRepository).transition(any(), eq(
             com.softropic.skillars.platform.payment.repo.SessionPackPurchaseAttempt.Status.NO_CHARGE), any(), any());
-        verify(subscriptionService, never()).savePaymentMethodAndScheduleSync(any(), any());
+        verify(subscriptionService, never()).reapplyPaymentMethodAndScheduleSync(any(), any(), any());
+    }
+
+    // ── skillars-deferred-177 (RS03h): a payer erased while the purchase runs is refused before the charge ─────────
+
+    private void assertRefusedAsErased(String paymentMethodId) {
+        assertThatThrownBy(() -> sessionPackPaymentService.purchasePack(PARENT_ID, TIER_ID, PLAYER_ID, paymentMethodId, KEY))
+            .isInstanceOf(com.softropic.skillars.platform.payment.contract.exception.PackNoChargeException.class)
+            .hasMessage(PaymentGatewayException.ACCOUNT_ERASED);
+        // review round 2: the attempt row written after the erasure's own card nulling loses its card ids too
+        verify(attemptRepository).nullCardsForParent(PARENT_ID);
+        verify(paymentGateway, never()).chargeAndCapture(any(), any(), any(), any(), anyString(), any());
+        verify(attemptRepository).transition(any(), eq(
+            com.softropic.skillars.platform.payment.repo.SessionPackPurchaseAttempt.Status.NO_CHARGE), any(), any());
+    }
+
+    @Test
+    void purchasePack_existingCustomerErasedMeanwhile_namedCard_isRefusedBeforeTheCharge() {
+        stubPurchaseWithExistingCustomer(makeActiveTier(), "pm_old");
+        when(stripeCustomerCardWrites.writeCardIfPayerLive(PARENT_ID, "pm_new")).thenReturn(false);
+
+        assertRefusedAsErased("pm_new");
+    }
+
+    @Test
+    void purchasePack_existingCustomerErasedMeanwhile_savedCard_isRefusedBeforeTheCharge() {
+        stubPurchaseWithExistingCustomer(makeActiveTier(), "pm_old");
+        when(stripeCustomerCardWrites.payerLive(PARENT_ID)).thenReturn(false);
+
+        assertRefusedAsErased(null);
+    }
+
+    /** skillars-deferred-177 (review round 3): the customer of a lost first-creation race is erased at Stripe. */
+    @Test
+    void purchasePack_losingTheFirstCreationRace_erasesTheUnrecordedStripeCustomer_noCharge() {
+        PlayerProfile player = new PlayerProfile();
+        player.setId(PLAYER_ID);
+        player.setUserId(PARENT_ID);
+        when(playerProfileRepository.findById(PLAYER_ID)).thenReturn(Optional.of(player));
+        when(sessionPackTierRepository.findById(TIER_ID)).thenReturn(Optional.of(makeActiveTier()));
+        when(stripeCustomerRepository.findById(PARENT_ID)).thenReturn(Optional.empty());
+        when(paymentGateway.createStripeCustomer(PARENT_ID)).thenReturn("cus_loser");
+        when(stripeCustomerRepository.insertIfAbsent(PARENT_ID, "cus_loser", null)).thenReturn(0); // a concurrent row won
+
+        assertThatThrownBy(() -> sessionPackPaymentService.purchasePack(PARENT_ID, TIER_ID, PLAYER_ID, null, KEY))
+            .isInstanceOf(com.softropic.skillars.platform.payment.contract.exception.PackNoChargeException.class);
+        verify(stripeCustomerRepository, never()).save(any()); // never merges over the winner's row (review round 4)
+
+        verify(stripeCustomerErasureOutboxSupport).scheduleOrphanErasure("cus_loser");
+        verify(paymentGateway, never()).chargeAndCapture(any(), any(), any(), any(), anyString(), any());
+    }
+
+    @Test
+    void purchasePack_firstCustomerCreatedWhileErased_isRefusedBeforeTheCharge() {
+        PlayerProfile player = new PlayerProfile();
+        player.setId(PLAYER_ID);
+        player.setUserId(PARENT_ID);
+        when(playerProfileRepository.findById(PLAYER_ID)).thenReturn(Optional.of(player));
+        when(sessionPackTierRepository.findById(TIER_ID)).thenReturn(Optional.of(makeActiveTier()));
+        when(stripeCustomerRepository.findById(PARENT_ID)).thenReturn(Optional.empty());
+        when(stripeCustomerRepository.insertIfAbsent(any(), any(), any())).thenReturn(1);
+        when(paymentGateway.createStripeCustomer(PARENT_ID)).thenReturn("cus_test");
+        when(stripeCustomerEmailSync.currentEmail(PARENT_ID)).thenReturn("before@example.com");
+        when(stripeCustomerEmailSync.syncIfEmailChangedSince(PARENT_ID, "before@example.com")).thenReturn(true);
+
+        assertRefusedAsErased(null);
     }
 
     @Test
     void purchasePack_aRefusedCard_keepsItsOwnCode_soTheUiCanOfferToUpdateTheCard_andIsStillNoCharge() {
         stubPurchaseWithExistingCustomer(makeActiveTier(), "pm_old");
-        when(paymentGateway.chargeAndCapture(any(), any(), any(), any(), anyString()))
+        when(paymentGateway.chargeAndCapture(any(), any(), any(), any(), anyString(), any()))
             .thenThrow(new PaymentGatewayException(PaymentGatewayException.CARD_DECLINED));
 
         assertThatThrownBy(() -> sessionPackPaymentService.purchasePack(PARENT_ID, TIER_ID, PLAYER_ID, "pm_new", KEY))
@@ -798,19 +886,152 @@ class SessionPackPaymentServiceTest {
     void purchasePack_successAfterTheResolverWroteNoCharge_isAllowedToMoveNoChargeToSucceeded() {
         stubPurchaseWithExistingCustomer(makeActiveTier(), "pm_old");
         when(sessionPackPurchaseRepository.findByStripePaymentIntentId("pi_test")).thenReturn(Optional.empty());
+        // the resolver already wrote NO_CHARGE: the write from the open statuses loses, the one from NO_CHARGE wins
+        when(attemptRepository.transition(any(), eq(com.softropic.skillars.platform.payment.repo.SessionPackPurchaseAttempt.Status.SUCCEEDED),
+            eq("pi_test"), eq(com.softropic.skillars.platform.payment.repo.SessionPackPurchaseAttempt.Status.OPEN))).thenReturn(false);
 
         sessionPackPaymentService.purchasePack(PARENT_ID, TIER_ID, PLAYER_ID, "pm_new", KEY);
 
-        // proof of capture beats a resolver's inference from absence (fourth review, H1)
+        // proof of capture beats a resolver's inference from absence (fourth review, H1); skillars-deferred-174 AC4 tags it
         verify(attemptRepository).transition(any(), eq(com.softropic.skillars.platform.payment.repo.SessionPackPurchaseAttempt.Status.SUCCEEDED),
-            eq("pi_test"), org.mockito.ArgumentMatchers.argThat(c -> c.contains(
-                com.softropic.skillars.platform.payment.repo.SessionPackPurchaseAttempt.Status.NO_CHARGE)));
+            eq("pi_test"), eq(java.util.Set.of(com.softropic.skillars.platform.payment.repo.SessionPackPurchaseAttempt.Status.NO_CHARGE)));
+    }
+
+    @Test
+    void purchasePack_aNamedCardNotOnThePayersCustomer_isRefusedBeforeAnyWrite() {
+        PlayerProfile player = new PlayerProfile();
+        player.setId(PLAYER_ID);
+        player.setUserId(PARENT_ID);
+        when(playerProfileRepository.findById(PLAYER_ID)).thenReturn(Optional.of(player));
+        when(sessionPackTierRepository.findById(TIER_ID)).thenReturn(Optional.of(makeActiveTier()));
+        when(stripeCustomerRepository.findById(PARENT_ID)).thenReturn(Optional.of(existingCustomerWithCard("pm_old")));
+        when(paymentGateway.paymentMethodBelongsTo("cus_test", "pm_foreign")).thenReturn(false);
+
+        assertThatThrownBy(() -> sessionPackPaymentService.purchasePack(PARENT_ID, TIER_ID, PLAYER_ID, "pm_foreign", KEY))
+            .isInstanceOf(org.springframework.web.server.ResponseStatusException.class)
+            .hasMessageContaining("payment.paymentMethodNotOwned");
+
+        verify(attemptRepository, never()).saveAndFlush(any());
+        verify(stripeCustomerRepository, never()).save(any());
+        verify(paymentGateway, never()).chargeAndCapture(any(), any(), any(), any(), any(), any());
+    }
+
+    /** skillars-deferred-178 (RS06j): a same-key request that lost the insert race is answered from the winner, not 400. */
+    @Test
+    void purchasePack_ownershipRefusedButASameKeyAttemptAppeared_isAnsweredFromThatAttempt() {
+        PlayerProfile player = new PlayerProfile();
+        player.setId(PLAYER_ID);
+        player.setUserId(PARENT_ID);
+        when(playerProfileRepository.findById(PLAYER_ID)).thenReturn(Optional.of(player));
+        when(sessionPackTierRepository.findById(TIER_ID)).thenReturn(Optional.of(makeActiveTier()));
+        when(stripeCustomerRepository.findById(PARENT_ID)).thenReturn(Optional.of(existingCustomerWithCard("pm_old")));
+        when(paymentGateway.paymentMethodBelongsTo("cus_test", "pm_new")).thenReturn(false);
+        com.softropic.skillars.platform.payment.repo.SessionPackPurchaseAttempt winner =
+            new com.softropic.skillars.platform.payment.repo.SessionPackPurchaseAttempt(
+                PARENT_ID, KEY, TIER_ID, PLAYER_ID, "pm_old", "pm_new", true);
+        winner.setStatus(com.softropic.skillars.platform.payment.repo.SessionPackPurchaseAttempt.Status.NO_CHARGE);
+        when(attemptRepository.findByParentIdAndAttemptKey(PARENT_ID, KEY))
+            .thenReturn(Optional.empty())       // the replay check: the winner had not inserted yet
+            .thenReturn(Optional.of(winner));   // after the refusal: it has
+
+        assertThatThrownBy(() -> sessionPackPaymentService.purchasePack(PARENT_ID, TIER_ID, PLAYER_ID, "pm_new", KEY))
+            .isInstanceOf(com.softropic.skillars.platform.payment.contract.exception.PackNoChargeException.class);
+
+        verify(attemptRepository, never()).saveAndFlush(any());
+        verify(paymentGateway, never()).chargeAndCapture(any(), any(), any(), any(), any(), any());
+    }
+
+    /** skillars-deferred-178 (RS06f): a request that resumes after the resolver closed its attempt does not charge. */
+    @Test
+    void purchasePack_attemptClosedByTheResolverBeforeTheCardWrite_writesNoCard_andIsNotCharged() {
+        stubPurchaseWithExistingCustomer(makeActiveTier(), "pm_old");
+        when(attemptRepository.existsByIdAndStatusNot(1L,
+            com.softropic.skillars.platform.payment.repo.SessionPackPurchaseAttempt.Status.IN_PROGRESS)).thenReturn(true);
+
+        assertThatThrownBy(() -> sessionPackPaymentService.purchasePack(PARENT_ID, TIER_ID, PLAYER_ID, "pm_new", KEY))
+            .isInstanceOf(com.softropic.skillars.platform.payment.contract.exception.PackNoChargeException.class);
+
+        verify(paymentGateway, never()).chargeAndCapture(any(), any(), any(), any(), any(), any());
+        // review round 2: a later purchase may own the card by now, so a stale request neither writes nor reverts one
+        verify(stripeCustomerCardWrites, never()).writeCardIfPayerLive(any(), any());
+        verify(stripeCustomerRepository, never()).revertPaymentMethod(any(), any(), any());
+    }
+
+    @Test
+    void purchasePack_attemptClosedBetweenTheCardWriteAndTheCharge_revertsTheCardItWrote() {
+        stubPurchaseWithExistingCustomer(makeActiveTier(), "pm_old");
+        when(attemptRepository.existsByIdAndStatusNot(1L,
+            com.softropic.skillars.platform.payment.repo.SessionPackPurchaseAttempt.Status.IN_PROGRESS))
+            .thenReturn(false).thenReturn(true);
+
+        assertThatThrownBy(() -> sessionPackPaymentService.purchasePack(PARENT_ID, TIER_ID, PLAYER_ID, "pm_new", KEY))
+            .isInstanceOf(com.softropic.skillars.platform.payment.contract.exception.PackNoChargeException.class);
+
+        verify(paymentGateway, never()).chargeAndCapture(any(), any(), any(), any(), any(), any());
+        verify(stripeCustomerRepository).revertPaymentMethod(PARENT_ID, "pm_old", "pm_new");
+    }
+
+    @Test
+    void purchasePack_aNamedCardWithoutAStripeCustomer_isRefused_noCustomerIsCreated() {
+        PlayerProfile player = new PlayerProfile();
+        player.setId(PLAYER_ID);
+        player.setUserId(PARENT_ID);
+        when(playerProfileRepository.findById(PLAYER_ID)).thenReturn(Optional.of(player));
+        when(sessionPackTierRepository.findById(TIER_ID)).thenReturn(Optional.of(makeActiveTier()));
+        when(stripeCustomerRepository.findById(PARENT_ID)).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> sessionPackPaymentService.purchasePack(PARENT_ID, TIER_ID, PLAYER_ID, "pm_new", KEY))
+            .isInstanceOf(org.springframework.web.server.ResponseStatusException.class)
+            .hasMessageContaining("payment.paymentMethodNotOwned");
+
+        verify(paymentGateway, never()).createStripeCustomer(any());
+        verify(attemptRepository, never()).saveAndFlush(any());
+    }
+
+    /** skillars-deferred-174 AC3 (RS09d): the card charged is the one the request named, whatever the column holds by then. */
+    @Test
+    void purchasePack_chargesTheNamedCard_evenWhenTheResolverRevertedTheColumnBeforeTheCharge() {
+        stubPurchaseWithExistingCustomer(makeActiveTier(), "pm_old");
+        when(sessionPackPurchaseRepository.findByStripePaymentIntentId("pi_test")).thenReturn(Optional.empty());
+        // the RS09d interleaving: after the card write, before the charge, the resolver put the previous card back
+        when(stripeCustomerCardWrites.writeCardIfPayerLive(PARENT_ID, "pm_new")).thenAnswer(inv -> {
+            stripeCustomerRepository.revertPaymentMethod(PARENT_ID, "pm_old", "pm_new");
+            return true;
+        });
+
+        sessionPackPaymentService.purchasePack(PARENT_ID, TIER_ID, PLAYER_ID, "pm_new", KEY);
+
+        verify(paymentGateway).chargeAndCapture(eq(TIER_ID), eq(PARENT_ID), eq(COACH_ID), any(), anyString(), eq("pm_new"));
+    }
+
+    @Test
+    void purchasePack_withoutANamedCard_chargesTheSavedCard() {
+        stubPurchaseWithExistingCustomer(makeActiveTier(), "pm_old");
+        when(sessionPackPurchaseRepository.findByStripePaymentIntentId("pi_test")).thenReturn(Optional.empty());
+
+        sessionPackPaymentService.purchasePack(PARENT_ID, TIER_ID, PLAYER_ID, null, KEY);
+
+        verify(paymentGateway).chargeAndCapture(eq(TIER_ID), eq(PARENT_ID), eq(COACH_ID), any(), anyString(),
+            org.mockito.ArgumentMatchers.isNull());
+        verify(paymentGateway, never()).paymentMethodBelongsTo(any(), any());
+    }
+
+    /** skillars-deferred-174 AC4: a card saved by someone else during the purchase is kept (the CAS reports it lost). */
+    @Test
+    void purchasePack_aCardSavedDuringThePurchase_isKept() {
+        stubPurchaseWithExistingCustomer(makeActiveTier(), "pm_old");
+        when(sessionPackPurchaseRepository.findByStripePaymentIntentId("pi_test")).thenReturn(Optional.empty());
+        when(subscriptionService.reapplyPaymentMethodAndScheduleSync(PARENT_ID, "pm_old", "pm_new")).thenReturn(false);
+
+        sessionPackPaymentService.purchasePack(PARENT_ID, TIER_ID, PLAYER_ID, "pm_new", KEY);
+
+        verify(subscriptionService, never()).savePaymentMethodAndScheduleSync(any(), any());
     }
 
     @Test
     void purchasePack_declineWithNoCardAttempted_doesNotTouchTheSavedCard() {
         stubPurchaseWithExistingCustomer(makeActiveTier(), "pm_old");
-        when(paymentGateway.chargeAndCapture(any(), any(), any(), any(), anyString()))
+        when(paymentGateway.chargeAndCapture(any(), any(), any(), any(), anyString(), any()))
             .thenThrow(new PaymentGatewayException("payment.lifecycleFailure"));
 
         assertThatThrownBy(() -> sessionPackPaymentService.purchasePack(PARENT_ID, TIER_ID, PLAYER_ID, null, KEY))
@@ -822,7 +1043,7 @@ class SessionPackPaymentServiceTest {
     @Test
     void purchasePack_outcomeUnknown_marksUnknown_neverRevertsTheCard_andRethrows() {
         stubPurchaseWithExistingCustomer(makeActiveTier(), "pm_old");
-        when(paymentGateway.chargeAndCapture(any(), any(), any(), any(), anyString()))
+        when(paymentGateway.chargeAndCapture(any(), any(), any(), any(), anyString(), any()))
             .thenThrow(new com.softropic.skillars.platform.payment.contract.exception.ChargeOutcomeUnknownException("pack-key", null));
 
         assertThatThrownBy(() -> sessionPackPaymentService.purchasePack(PARENT_ID, TIER_ID, PLAYER_ID, "pm_new", KEY))
@@ -832,10 +1053,125 @@ class SessionPackPaymentServiceTest {
         verify(stripeCustomerRepository, never()).revertPaymentMethod(any(), any(), any());
     }
 
+    /** skillars-deferred-178 (review round 1): an unknown outcome on an attempt the resolver closed meanwhile is alerted. */
+    @Test
+    void purchasePack_outcomeUnknownOnAnAttemptClosedMeanwhile_raisesTheLateCaptureAlert() {
+        stubPurchaseWithExistingCustomer(makeActiveTier(), "pm_old");
+        when(paymentGateway.chargeAndCapture(any(), any(), any(), any(), anyString(), any()))
+            .thenThrow(new com.softropic.skillars.platform.payment.contract.exception.ChargeOutcomeUnknownException("pack-key", null));
+        when(attemptRepository.transition(any(), eq(com.softropic.skillars.platform.payment.repo.SessionPackPurchaseAttempt.Status.UNKNOWN),
+            any(), any())).thenReturn(false);
+        // after the charge: the resolver wrote NO_CHARGE meanwhile (review round 2: only NO_CHARGE raises it)
+        when(attemptRepository.existsByIdAndStatus(1L,
+            com.softropic.skillars.platform.payment.repo.SessionPackPurchaseAttempt.Status.NO_CHARGE)).thenReturn(true);
+
+        ch.qos.logback.classic.Logger logger = (ch.qos.logback.classic.Logger) org.slf4j.LoggerFactory.getLogger(SessionPackPaymentService.class);
+        ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent> logs = new ch.qos.logback.core.read.ListAppender<>();
+        logs.start();
+        logger.addAppender(logs);
+        try {
+            assertThatThrownBy(() -> sessionPackPaymentService.purchasePack(PARENT_ID, TIER_ID, PLAYER_ID, null, KEY))
+                .isInstanceOf(com.softropic.skillars.platform.payment.contract.exception.ChargeOutcomeUnknownException.class);
+        } finally {
+            logger.detachAppender(logs);
+        }
+
+        org.assertj.core.api.Assertions.assertThat(logs.list)
+            .anyMatch(e -> e.getFormattedMessage().startsWith("[PACK_PURCHASE_LATE_CAPTURE]"));
+    }
+
+    /** Review round 3: an unknown outcome on a NO_CHARGE attempt reopens it, so Stripe decides instead of "not charged". */
+    @Test
+    void purchasePack_outcomeUnknownOnANoChargeAttempt_reopensItForTheResolver_andAlerts() {
+        stubPurchaseWithExistingCustomer(makeActiveTier(), "pm_old");
+        when(paymentGateway.chargeAndCapture(any(), any(), any(), any(), anyString(), any()))
+            .thenThrow(new com.softropic.skillars.platform.payment.contract.exception.ChargeOutcomeUnknownException("pack-key", null));
+        var UNKNOWN = com.softropic.skillars.platform.payment.repo.SessionPackPurchaseAttempt.Status.UNKNOWN;
+        var NO_CHARGE = com.softropic.skillars.platform.payment.repo.SessionPackPurchaseAttempt.Status.NO_CHARGE;
+        var IN_PROGRESS = com.softropic.skillars.platform.payment.repo.SessionPackPurchaseAttempt.Status.IN_PROGRESS;
+        when(attemptRepository.transition(any(), eq(UNKNOWN), any(), eq(java.util.Set.of(IN_PROGRESS)))).thenReturn(false);
+        when(attemptRepository.transition(any(), eq(UNKNOWN), any(), eq(java.util.Set.of(NO_CHARGE)))).thenReturn(true);
+        when(attemptRepository.existsByIdAndStatus(1L, NO_CHARGE)).thenReturn(true);
+
+        ch.qos.logback.classic.Logger logger = (ch.qos.logback.classic.Logger) org.slf4j.LoggerFactory.getLogger(SessionPackPaymentService.class);
+        ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent> logs = new ch.qos.logback.core.read.ListAppender<>();
+        logs.start();
+        logger.addAppender(logs);
+        try {
+            assertThatThrownBy(() -> sessionPackPaymentService.purchasePack(PARENT_ID, TIER_ID, PLAYER_ID, null, KEY))
+                .isInstanceOf(com.softropic.skillars.platform.payment.contract.exception.ChargeOutcomeUnknownException.class);
+        } finally {
+            logger.detachAppender(logs);
+        }
+
+        verify(attemptRepository).transition(any(), eq(UNKNOWN), any(), eq(java.util.Set.of(NO_CHARGE)));
+        // review round 4: alerted even when reopened, since the parent may already hold a second pack
+        org.assertj.core.api.Assertions.assertThat(logs.list)
+            .anyMatch(e -> e.getFormattedMessage().startsWith("[PACK_PURCHASE_LATE_CAPTURE]"));
+    }
+
+    /** Review round 6: the index refusing the reopen (the parent bought again) throws, and is still alerted. */
+    @Test
+    void purchasePack_outcomeUnknown_reopenRefusedByTheIndex_isStillAlerted() {
+        stubPurchaseWithExistingCustomer(makeActiveTier(), "pm_old");
+        when(paymentGateway.chargeAndCapture(any(), any(), any(), any(), anyString(), any()))
+            .thenThrow(new com.softropic.skillars.platform.payment.contract.exception.ChargeOutcomeUnknownException("pack-key", null));
+        var UNKNOWN = com.softropic.skillars.platform.payment.repo.SessionPackPurchaseAttempt.Status.UNKNOWN;
+        var NO_CHARGE = com.softropic.skillars.platform.payment.repo.SessionPackPurchaseAttempt.Status.NO_CHARGE;
+        var IN_PROGRESS = com.softropic.skillars.platform.payment.repo.SessionPackPurchaseAttempt.Status.IN_PROGRESS;
+        when(attemptRepository.transition(any(), eq(UNKNOWN), any(), eq(java.util.Set.of(IN_PROGRESS)))).thenReturn(false);
+        when(attemptRepository.transition(any(), eq(UNKNOWN), any(), eq(java.util.Set.of(NO_CHARGE))))
+            .thenThrow(new org.springframework.dao.DataIntegrityViolationException("uq_sppa_open_per_parent"));
+        when(attemptRepository.existsByIdAndStatus(1L, NO_CHARGE)).thenReturn(true);
+
+        ch.qos.logback.classic.Logger logger = (ch.qos.logback.classic.Logger) org.slf4j.LoggerFactory.getLogger(SessionPackPaymentService.class);
+        ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent> logs = new ch.qos.logback.core.read.ListAppender<>();
+        logs.start();
+        logger.addAppender(logs);
+        try {
+            assertThatThrownBy(() -> sessionPackPaymentService.purchasePack(PARENT_ID, TIER_ID, PLAYER_ID, null, KEY))
+                .isInstanceOf(com.softropic.skillars.platform.payment.contract.exception.ChargeOutcomeUnknownException.class);
+        } finally {
+            logger.detachAppender(logs);
+        }
+        org.assertj.core.api.Assertions.assertThat(logs.list)
+            .anyMatch(e -> e.getFormattedMessage().startsWith("[PACK_PURCHASE_LATE_CAPTURE]"));
+    }
+
+    /** Review round 5: a failed re-check never strands the attempt; the purchase goes on as before the check existed. */
+    @Test
+    void purchasePack_theReCheckFailing_goesOnWithTheCharge() {
+        stubPurchaseWithExistingCustomer(makeActiveTier(), "pm_old");
+        when(attemptRepository.existsByIdAndStatusNot(any(), any())).thenThrow(new org.springframework.dao.QueryTimeoutException("pool"));
+
+        sessionPackPaymentService.purchasePack(PARENT_ID, TIER_ID, PLAYER_ID, null, KEY);
+
+        verify(paymentGateway).chargeAndCapture(any(), any(), any(), any(), anyString(), any());
+    }
+
+    /** Review round 3: a failing winner re-read never replaces the ownership refusal. */
+    @Test
+    void purchasePack_ownershipRefusedAndTheWinnerReReadFails_isStillTheRefusal() {
+        PlayerProfile player = new PlayerProfile();
+        player.setId(PLAYER_ID);
+        player.setUserId(PARENT_ID);
+        when(playerProfileRepository.findById(PLAYER_ID)).thenReturn(Optional.of(player));
+        when(sessionPackTierRepository.findById(TIER_ID)).thenReturn(Optional.of(makeActiveTier()));
+        when(stripeCustomerRepository.findById(PARENT_ID)).thenReturn(Optional.of(existingCustomerWithCard("pm_old")));
+        when(paymentGateway.paymentMethodBelongsTo("cus_test", "pm_foreign")).thenReturn(false);
+        when(attemptRepository.findByParentIdAndAttemptKey(PARENT_ID, KEY))
+            .thenReturn(Optional.empty())
+            .thenThrow(new org.springframework.dao.QueryTimeoutException("pool timeout"));
+
+        assertThatThrownBy(() -> sessionPackPaymentService.purchasePack(PARENT_ID, TIER_ID, PLAYER_ID, "pm_foreign", KEY))
+            .isInstanceOf(org.springframework.web.server.ResponseStatusException.class)
+            .hasMessageContaining("payment.paymentMethodNotOwned");
+    }
+
     @Test
     void purchasePack_unclassifiedRuntimeException_isUnknown_notLeftInProgress() {
         stubPurchaseWithExistingCustomer(makeActiveTier(), "pm_old");
-        when(paymentGateway.chargeAndCapture(any(), any(), any(), any(), anyString())).thenThrow(new IllegalStateException("pool timeout"));
+        when(paymentGateway.chargeAndCapture(any(), any(), any(), any(), anyString(), any())).thenThrow(new IllegalStateException("pool timeout"));
 
         assertThatThrownBy(() -> sessionPackPaymentService.purchasePack(PARENT_ID, TIER_ID, PLAYER_ID, "pm_new", KEY))
             .isInstanceOf(IllegalStateException.class);
@@ -856,7 +1192,7 @@ class SessionPackPaymentServiceTest {
             .isInstanceOf(org.springframework.web.server.ResponseStatusException.class)
             .hasMessageContaining("payment.attemptUnresolved");
 
-        verify(paymentGateway, never()).chargeAndCapture(any(), any(), any(), any(), any());
+        verify(paymentGateway, never()).chargeAndCapture(any(), any(), any(), any(), any(), any());
         verify(stripeCustomerRepository, never()).save(any());
     }
 
@@ -934,7 +1270,7 @@ class SessionPackPaymentServiceTest {
     }
 
     private void verifyNoStripeCalls() {
-        verify(paymentGateway, never()).chargeAndCapture(any(), any(), any(), any(), any());
+        verify(paymentGateway, never()).chargeAndCapture(any(), any(), any(), any(), any(), any());
         verify(paymentGateway, never()).findChargeByIdempotencyKey(any(), any(), any());
         verify(paymentGateway, never()).getCaptureState(any());
         verify(paymentGateway, never()).refund(any(), any(), any());
@@ -1074,8 +1410,40 @@ class SessionPackPaymentServiceTest {
         assertThat(result.status()).isEqualTo(com.softropic.skillars.platform.payment.repo.SessionPackPurchaseAttempt.Status.SUCCEEDED);
         verify(sessionPackPurchaseRepository).save(any());
         assertThat(failure.getResolvedAt()).isNotNull();
-        verify(subscriptionService).savePaymentMethodAndScheduleSync(PARENT_ID, "pm_new");
+        verify(subscriptionService).reapplyPaymentMethodAndScheduleSync(PARENT_ID, "pm_old", "pm_new");
         verify(paymentGateway, never()).refund(any(), any(), any());
+    }
+
+    /** Review round 4: a capture recorded onto a row written NO_CHARGE since the resolver loaded it is alerted. */
+    @Test
+    void resolve_captureLandingOnARowClosedAsNoChargeMeanwhile_isRecorded_andRaisesTheLateCaptureAlert() {
+        minAgeAndAbsenceAge(10, 30);
+        openAttemptInDb(com.softropic.skillars.platform.payment.repo.SessionPackPurchaseAttempt.Status.IN_PROGRESS, 12);
+        when(paymentGateway.findChargeByIdempotencyKey(any(), anyString(), any())).thenReturn(Optional.of(lookup("succeeded")));
+        when(sessionPackPurchaseRepository.findByStripePaymentIntentId("pi_found")).thenReturn(Optional.empty());
+        when(paymentGateway.getCaptureState("pi_found")).thenReturn(
+            new com.softropic.skillars.platform.payment.contract.CaptureState(new BigDecimal("100.00"), BigDecimal.ZERO));
+        when(sessionPackTierRepository.findById(TIER_ID)).thenReturn(Optional.of(makeActiveTier()));
+        when(sessionPackPurchaseRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        var SUCCEEDED = com.softropic.skillars.platform.payment.repo.SessionPackPurchaseAttempt.Status.SUCCEEDED;
+        var NO_CHARGE = com.softropic.skillars.platform.payment.repo.SessionPackPurchaseAttempt.Status.NO_CHARGE;
+        when(attemptRepository.transition(eq(77L), eq(SUCCEEDED), eq("pi_found"), eq(java.util.EnumSet.of(
+            com.softropic.skillars.platform.payment.repo.SessionPackPurchaseAttempt.Status.IN_PROGRESS,
+            com.softropic.skillars.platform.payment.repo.SessionPackPurchaseAttempt.Status.UNKNOWN,
+            com.softropic.skillars.platform.payment.repo.SessionPackPurchaseAttempt.Status.UNRECONCILED)))).thenReturn(false);
+        when(attemptRepository.transition(eq(77L), eq(SUCCEEDED), eq("pi_found"), eq(java.util.EnumSet.of(NO_CHARGE)))).thenReturn(true);
+
+        ch.qos.logback.classic.Logger logger = (ch.qos.logback.classic.Logger) org.slf4j.LoggerFactory.getLogger(SessionPackPaymentService.class);
+        ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent> logs = new ch.qos.logback.core.read.ListAppender<>();
+        logs.start();
+        logger.addAppender(logs);
+        try {
+            assertThat(sessionPackPaymentService.resolveAttempt(77L).status()).isEqualTo(SUCCEEDED);
+        } finally {
+            logger.detachAppender(logs);
+        }
+        org.assertj.core.api.Assertions.assertThat(logs.list)
+            .anyMatch(e -> e.getFormattedMessage().startsWith("[PACK_PURCHASE_LATE_CAPTURE]"));
     }
 
     @Test
@@ -1109,5 +1477,343 @@ class SessionPackPaymentServiceTest {
         assertThat(result.status()).isEqualTo(com.softropic.skillars.platform.payment.repo.SessionPackPurchaseAttempt.Status.SUCCEEDED);
         verify(sessionPackPurchaseRepository, never()).save(any());
         verifyNoStripeCalls();
+    }
+
+    // ── skillars-deferred-174 AC6 (RS06e): the job marks the rows only an operator can close ─────────────────────────
+
+    private static final com.softropic.skillars.platform.payment.repo.SessionPackPurchaseAttempt.Status UNRECONCILED =
+        com.softropic.skillars.platform.payment.repo.SessionPackPurchaseAttempt.Status.UNRECONCILED;
+
+    private com.softropic.skillars.platform.payment.repo.SessionPackPurchaseAttempt queuedForTheJob(long ageMinutes) {
+        minAgeAndAbsenceAge(10, 30);
+        lenient().when(configService.getBoundedLong(
+            com.softropic.skillars.platform.config.service.ConfigBounds.PACK_ATTEMPT_OPERATOR_AFTER_MINUTES)).thenReturn(60L);
+        var a = attempt(UNRECONCILED, ageMinutes);
+        when(attemptRepository.findById(77L)).thenReturn(Optional.of(a));
+        lenient().when(stripeCustomerRepository.findById(PARENT_ID)).thenReturn(Optional.of(existingCustomerWithCard("pm_new")));
+        when(attemptRepository.findOpenOlderThan(any(), any())).thenReturn(List.of(a));
+        lenient().when(attemptRepository.markNeedsOperator(eq(77L), any())).thenReturn(1);
+        return a;
+    }
+
+    private void capturedWithoutAPack() {
+        when(paymentGateway.findChargeByIdempotencyKey(any(), anyString(), any())).thenReturn(Optional.of(lookup("succeeded")));
+        when(sessionPackPurchaseRepository.findByStripePaymentIntentId("pi_found")).thenReturn(Optional.empty());
+        when(paymentGateway.getCaptureState("pi_found")).thenReturn(
+            new com.softropic.skillars.platform.payment.contract.CaptureState(new BigDecimal("100.00"), BigDecimal.ZERO));
+    }
+
+    @Test
+    void job_tierGone_marksTheRowForAnOperatorAtOnce() {
+        queuedForTheJob(12);
+        capturedWithoutAPack();
+        when(sessionPackTierRepository.findById(TIER_ID)).thenReturn(Optional.empty());
+
+        assertThat(sessionPackPaymentService.resolveStaleAttempts()).isZero();
+
+        verify(attemptRepository).markNeedsOperator(eq(77L), any());
+        verify(sessionPackPurchaseRepository, never()).save(any());
+    }
+
+    @Test
+    void job_recordFailed_isRetried_untilTheAttemptIsOlderThanTheThreshold() {
+        queuedForTheJob(59);
+        capturedWithoutAPack();
+        when(sessionPackTierRepository.findById(TIER_ID)).thenReturn(Optional.of(makeActiveTier()));
+        when(sessionPackPurchaseRepository.save(any())).thenThrow(new IllegalStateException("db down"));
+
+        sessionPackPaymentService.resolveStaleAttempts();
+
+        verify(attemptRepository, never()).markNeedsOperator(any(), any());
+    }
+
+    @Test
+    void job_recordFailed_pastTheThreshold_isMarked() {
+        queuedForTheJob(61);
+        capturedWithoutAPack();
+        when(sessionPackTierRepository.findById(TIER_ID)).thenReturn(Optional.of(makeActiveTier()));
+        when(sessionPackPurchaseRepository.save(any())).thenThrow(new IllegalStateException("db down"));
+
+        sessionPackPaymentService.resolveStaleAttempts();
+
+        verify(attemptRepository).markNeedsOperator(eq(77L), any());
+    }
+
+    @Test
+    void job_unreadableCharge_pastTheThreshold_isMarked() {
+        queuedForTheJob(61);
+        when(paymentGateway.findChargeByIdempotencyKey(any(), anyString(), any())).thenReturn(Optional.of(lookup("succeeded")));
+        when(sessionPackPurchaseRepository.findByStripePaymentIntentId("pi_found")).thenReturn(Optional.empty());
+        when(paymentGateway.getCaptureState("pi_found")).thenReturn(new com.softropic.skillars.platform.payment.contract.CaptureState(null, BigDecimal.ZERO));
+
+        sessionPackPaymentService.resolveStaleAttempts();
+
+        verify(attemptRepository).markNeedsOperator(eq(77L), any());
+    }
+
+    @Test
+    void job_aNoChargeWriteThatDoesNotLand_pastTheThreshold_isMarked() {
+        // An UNRECONCILED row Stripe shows no charge for: the job never closes it as NO_CHARGE, and (skillars-deferred-176
+        // AC4, RS06i) never reverts the card a capture was seen with
+        queuedForTheJob(61);
+        when(paymentGateway.findChargeByIdempotencyKey(any(), anyString(), any())).thenReturn(Optional.empty());
+
+        assertThat(sessionPackPaymentService.resolveStaleAttempts()).isZero();
+
+        verify(attemptRepository).markNeedsOperator(eq(77L), any());
+        verify(attemptRepository, never()).transition(any(), any(), any(), any());
+        verify(stripeCustomerRepository, never()).revertPaymentMethod(any(), any(), any());
+    }
+
+    @Test
+    void job_aStripeOutage_isNeverMarked_howeverOldTheAttempt() {
+        queuedForTheJob(24 * 60);
+        when(paymentGateway.findChargeByIdempotencyKey(any(), anyString(), any()))
+            .thenThrow(new PaymentGatewayException("payment.chargeLookupFailed"));
+
+        sessionPackPaymentService.resolveStaleAttempts();
+
+        verify(attemptRepository, never()).markNeedsOperator(any(), any());
+    }
+
+    // ── skillars-deferred-174 AC5 (RS06b): the admin close action ────────────────────────────────────────────────────
+
+    private static final Long ADMIN_ID = 5L;
+
+    @Test
+    void close_unknownAttempt_is404() {
+        when(attemptRepository.findById(99L)).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> sessionPackPaymentService.closeAttemptByAdmin(99L, ADMIN_ID, "stuck"))
+            .isInstanceOf(ResourceNotFoundException.class);
+    }
+
+    @Test
+    void close_aTerminalAttempt_is409NotOpen() {
+        when(attemptRepository.findById(77L)).thenReturn(Optional.of(
+            attempt(com.softropic.skillars.platform.payment.repo.SessionPackPurchaseAttempt.Status.SUCCEEDED, 120)));
+
+        assertThatThrownBy(() -> sessionPackPaymentService.closeAttemptByAdmin(77L, ADMIN_ID, "stuck"))
+            .isInstanceOf(org.springframework.web.server.ResponseStatusException.class)
+            .hasMessageContaining("payment.packAttempt.notOpen");
+        verify(attemptRepository, never()).recordAdminClose(any(), any(), any());
+    }
+
+    @Test
+    void close_nothingChargedPastTheAbsenceAge_closesAsNoCharge_throughTheCardRevert_andRecordsWhoAndWhy() {
+        minAgeAndAbsenceAge(10, 30);
+        var open = attempt(com.softropic.skillars.platform.payment.repo.SessionPackPurchaseAttempt.Status.IN_PROGRESS, 120);
+        var closed = attempt(com.softropic.skillars.platform.payment.repo.SessionPackPurchaseAttempt.Status.NO_CHARGE, 120);
+        when(attemptRepository.findById(77L)).thenReturn(Optional.of(open), Optional.of(open), Optional.of(closed));
+        when(stripeCustomerRepository.findById(PARENT_ID)).thenReturn(Optional.of(existingCustomerWithCard("pm_new")));
+        when(paymentGateway.findChargeByIdempotencyKey(any(), anyString(), any())).thenReturn(Optional.empty());
+
+        var response = sessionPackPaymentService.closeAttemptByAdmin(77L, ADMIN_ID, "parent blocked since Monday");
+
+        assertThat(response.status()).isEqualTo("NO_CHARGE");
+        verify(stripeCustomerRepository).revertPaymentMethod(PARENT_ID, "pm_old", "pm_new");
+        verify(attemptRepository).recordAdminClose(77L, ADMIN_ID, "parent blocked since Monday");
+    }
+
+    @Test
+    void close_whenRecordingWhoClosedItFails_theCloseStillStands() {
+        minAgeAndAbsenceAge(10, 30);
+        var open = attempt(com.softropic.skillars.platform.payment.repo.SessionPackPurchaseAttempt.Status.IN_PROGRESS, 120);
+        when(attemptRepository.findById(77L)).thenReturn(Optional.of(open));
+        when(stripeCustomerRepository.findById(PARENT_ID)).thenReturn(Optional.of(existingCustomerWithCard("pm_new")));
+        when(paymentGateway.findChargeByIdempotencyKey(any(), anyString(), any())).thenReturn(Optional.empty());
+        when(attemptRepository.recordAdminClose(any(), any(), any())).thenThrow(new IllegalStateException("db blip"));
+
+        var response = sessionPackPaymentService.closeAttemptByAdmin(77L, ADMIN_ID, "stuck");
+
+        assertThat(response.status()).isEqualTo("NO_CHARGE");
+    }
+
+    @Test
+    void close_aRowClosedElsewhereMeanwhile_is409NotOpen_andIsNotRecordedAsThisAdminsClose() {
+        minAgeAndAbsenceAge(10, 30);
+        var open = attempt(com.softropic.skillars.platform.payment.repo.SessionPackPurchaseAttempt.Status.IN_PROGRESS, 120);
+        var closedByTheJob = attempt(com.softropic.skillars.platform.payment.repo.SessionPackPurchaseAttempt.Status.NO_CHARGE, 120);
+        when(attemptRepository.findById(77L)).thenReturn(Optional.of(open), Optional.of(open), Optional.of(closedByTheJob));
+        when(stripeCustomerRepository.findById(PARENT_ID)).thenReturn(Optional.of(existingCustomerWithCard("pm_new")));
+        when(paymentGateway.findChargeByIdempotencyKey(any(), anyString(), any())).thenReturn(Optional.empty());
+        when(attemptRepository.transition(eq(77L), eq(
+            com.softropic.skillars.platform.payment.repo.SessionPackPurchaseAttempt.Status.NO_CHARGE), any(), any())).thenReturn(false);
+
+        assertThatThrownBy(() -> sessionPackPaymentService.closeAttemptByAdmin(77L, ADMIN_ID, "stuck"))
+            .isInstanceOf(org.springframework.web.server.ResponseStatusException.class)
+            .hasMessageContaining("payment.packAttempt.notOpen");
+        verify(attemptRepository, never()).recordAdminClose(any(), any(), any());
+    }
+
+    // skillars-deferred-176 AC4 (RS06i): only the operator closes an UNRECONCILED row, and only from its stored PaymentIntent
+
+    private com.softropic.skillars.platform.payment.repo.StripeRefundFailure unreconciledWithStoredIntent() {
+        minAgeAndAbsenceAge(10, 30);
+        var open = attempt(UNRECONCILED, 120);
+        open.setPaymentIntentId("pi_seen");
+        when(attemptRepository.findById(77L)).thenReturn(Optional.of(open));
+        lenient().when(sessionPackPurchaseRepository.findByStripePaymentIntentId("pi_seen")).thenReturn(Optional.empty());
+        var failure = new com.softropic.skillars.platform.payment.repo.StripeRefundFailure("pi_seen", new BigDecimal("100.00"), PARENT_ID, TIER_ID, "x");
+        lenient().when(refundFailureRepository.findByPaymentIntentId("pi_seen")).thenReturn(Optional.of(failure));
+        return failure;
+    }
+
+    @Test
+    void close_anUnreconciledAttemptWhoseIntentDidNotSucceed_closesAsNoCharge_withoutTheRevert_andResolvesItsRefundFailure() {
+        var failure = unreconciledWithStoredIntent();
+        when(paymentGateway.retrieveCharge("pi_seen")).thenReturn(
+            new com.softropic.skillars.platform.payment.contract.ChargeLookup("pi_seen", "canceled", new BigDecimal("100.00")));
+        when(attemptRepository.transition(77L, com.softropic.skillars.platform.payment.repo.SessionPackPurchaseAttempt.Status.NO_CHARGE,
+            null, java.util.EnumSet.of(UNRECONCILED))).thenReturn(true);
+
+        var response = sessionPackPaymentService.closeAttemptByAdmin(77L, ADMIN_ID, "Stripe shows it canceled");
+
+        assertThat(response.status()).isEqualTo("NO_CHARGE");
+        verify(paymentGateway, never()).findChargeByIdempotencyKey(any(), any(), any());
+        verify(stripeCustomerRepository, never()).revertPaymentMethod(any(), any(), any());
+        assertThat(failure.getResolvedAt()).isNotNull();
+        verify(refundFailureRepository).save(failure);
+        verify(attemptRepository).recordAdminClose(77L, ADMIN_ID, "Stripe shows it canceled");
+    }
+
+    @Test
+    void close_anUnreconciledAttemptTheSearchCannotFind_butWhoseIntentWasCaptured_isNeverNoCharge() {
+        // round-1 V1: the search runs on the current customer and the chargeKey metadata; it is not consulted at all here
+        var failure = unreconciledWithStoredIntent();
+        lenient().when(paymentGateway.findChargeByIdempotencyKey(any(), anyString(), any())).thenReturn(Optional.empty());
+        when(paymentGateway.retrieveCharge("pi_seen")).thenReturn(
+            new com.softropic.skillars.platform.payment.contract.ChargeLookup("pi_seen", "succeeded", new BigDecimal("100.00")));
+        when(paymentGateway.getCaptureState("pi_seen")).thenReturn(
+            new com.softropic.skillars.platform.payment.contract.CaptureState(new BigDecimal("100.00"), BigDecimal.ZERO));
+        when(sessionPackTierRepository.findById(TIER_ID)).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> sessionPackPaymentService.closeAttemptByAdmin(77L, ADMIN_ID, "stuck"))
+            .isInstanceOf(org.springframework.web.server.ResponseStatusException.class)
+            .hasMessageContaining("payment.packAttempt.capturedNoPack");
+        verify(attemptRepository, never()).transition(any(), any(), any(), any());
+        assertThat(failure.getResolvedAt()).as("the refund is still owed").isNull();
+    }
+
+    @Test
+    void close_anUnreconciledAttemptRefundedInStripe_closesAsRefunded_andResolvesItsRefundFailure() {
+        var failure = unreconciledWithStoredIntent();
+        when(paymentGateway.retrieveCharge("pi_seen")).thenReturn(
+            new com.softropic.skillars.platform.payment.contract.ChargeLookup("pi_seen", "succeeded", new BigDecimal("100.00")));
+        when(paymentGateway.getCaptureState("pi_seen")).thenReturn(
+            new com.softropic.skillars.platform.payment.contract.CaptureState(new BigDecimal("100.00"), new BigDecimal("100.00")));
+        when(attemptRepository.transition(eq(77L), eq(com.softropic.skillars.platform.payment.repo.SessionPackPurchaseAttempt.Status.REFUNDED),
+            eq("pi_seen"), any())).thenReturn(true);
+
+        var response = sessionPackPaymentService.closeAttemptByAdmin(77L, ADMIN_ID, "refunded by hand");
+
+        assertThat(response.status()).isEqualTo("REFUNDED");
+        assertThat(failure.getResolvedAt()).isNotNull();
+    }
+
+    @Test
+    void close_anUnreconciledAttemptWhoseIntentCannotBeRead_isA422_andStaysOpen() {
+        unreconciledWithStoredIntent();
+        when(paymentGateway.retrieveCharge("pi_seen")).thenThrow(new PaymentGatewayException("payment.chargeLookupFailed"));
+
+        assertThatThrownBy(() -> sessionPackPaymentService.closeAttemptByAdmin(77L, ADMIN_ID, "stuck"))
+            .isInstanceOf(PaymentGatewayException.class);
+        verify(attemptRepository, never()).transition(any(), any(), any(), any());
+    }
+
+    @Test
+    void close_anUnreconciledAttemptWithoutAStoredIntent_isNeverClosedByAnEmptySearch() {
+        minAgeAndAbsenceAge(10, 30);
+        openAttemptInDb(UNRECONCILED, 120);
+        when(paymentGateway.findChargeByIdempotencyKey(any(), anyString(), any())).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> sessionPackPaymentService.closeAttemptByAdmin(77L, ADMIN_ID, "stuck"))
+            .isInstanceOf(org.springframework.web.server.ResponseStatusException.class)
+            .hasMessageContaining("payment.packAttempt.capturedNoPack");
+        verify(attemptRepository, never()).transition(any(), any(), any(), any());
+        verify(paymentGateway, never()).retrieveCharge(any());
+    }
+
+    @Test
+    void close_aNoChargeWriteThatDoesNotLand_is409WriteLost_notAStripeFailure() {
+        unreconciledWithStoredIntent();
+        when(paymentGateway.retrieveCharge("pi_seen")).thenReturn(
+            new com.softropic.skillars.platform.payment.contract.ChargeLookup("pi_seen", "canceled", new BigDecimal("100.00")));
+        when(attemptRepository.transition(eq(77L), eq(
+            com.softropic.skillars.platform.payment.repo.SessionPackPurchaseAttempt.Status.NO_CHARGE), any(), any())).thenReturn(false);
+
+        assertThatThrownBy(() -> sessionPackPaymentService.closeAttemptByAdmin(77L, ADMIN_ID, "stuck"))
+            .isInstanceOf(org.springframework.web.server.ResponseStatusException.class)
+            .hasMessageContaining("payment.packAttempt.writeLost");
+        verify(attemptRepository, never()).recordAdminClose(any(), any(), any());
+    }
+
+    @Test
+    void close_aProcessingCharge_isRefused409_andStaysOpen() {
+        minAgeAndAbsenceAge(10, 30);
+        openAttemptInDb(UNRECONCILED, 120);
+        when(paymentGateway.findChargeByIdempotencyKey(any(), anyString(), any())).thenReturn(Optional.of(lookup("processing")));
+
+        assertThatThrownBy(() -> sessionPackPaymentService.closeAttemptByAdmin(77L, ADMIN_ID, "stuck"))
+            .isInstanceOf(org.springframework.web.server.ResponseStatusException.class)
+            .hasMessageContaining("payment.packAttempt.chargePending");
+        verify(attemptRepository, never()).recordAdminClose(any(), any(), any());
+        verify(attemptRepository, never()).transition(any(), eq(
+            com.softropic.skillars.platform.payment.repo.SessionPackPurchaseAttempt.Status.NO_CHARGE), any(), any());
+    }
+
+    @Test
+    void close_noChargeYetInsideTheAbsenceAge_isRefused409TooRecent() {
+        minAgeAndAbsenceAge(10, 30);
+        openAttemptInDb(UNRECONCILED, 12);
+        when(paymentGateway.findChargeByIdempotencyKey(any(), anyString(), any())).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> sessionPackPaymentService.closeAttemptByAdmin(77L, ADMIN_ID, "stuck"))
+            .isInstanceOf(org.springframework.web.server.ResponseStatusException.class)
+            .hasMessageContaining("payment.packAttempt.tooRecent");
+        verify(attemptRepository, never()).transition(any(), any(), any(), any());
+    }
+
+    @Test
+    void close_capturedWithNoPackAfterTheRetry_isRefused409CapturedNoPack() {
+        minAgeAndAbsenceAge(10, 30);
+        openAttemptInDb(UNRECONCILED, 120);
+        capturedWithoutAPack();
+        when(sessionPackTierRepository.findById(TIER_ID)).thenReturn(Optional.of(makeActiveTier()));
+        when(sessionPackPurchaseRepository.save(any())).thenThrow(new IllegalStateException("db down"));
+
+        assertThatThrownBy(() -> sessionPackPaymentService.closeAttemptByAdmin(77L, ADMIN_ID, "stuck"))
+            .isInstanceOf(org.springframework.web.server.ResponseStatusException.class)
+            .hasMessageContaining("payment.packAttempt.capturedNoPack");
+        // the resolver retried recording the pack first
+        verify(sessionPackPurchaseRepository).save(any());
+        verify(paymentGateway, never()).refund(any(), any(), any());
+    }
+
+    @Test
+    void close_whenStripeCannotBeAsked_isA422GatewayError() {
+        minAgeAndAbsenceAge(10, 30);
+        openAttemptInDb(UNRECONCILED, 120);
+        when(paymentGateway.findChargeByIdempotencyKey(any(), anyString(), any()))
+            .thenThrow(new PaymentGatewayException("payment.chargeLookupFailed"));
+
+        assertThatThrownBy(() -> sessionPackPaymentService.closeAttemptByAdmin(77L, ADMIN_ID, "stuck"))
+            .isInstanceOf(PaymentGatewayException.class);
+        verify(attemptRepository, never()).recordAdminClose(any(), any(), any());
+    }
+
+    @Test
+    void close_byALimitedAdmin_isDenied() {
+        org.springframework.security.core.context.SecurityContextHolder.getContext().setAuthentication(
+            new org.springframework.security.authentication.UsernamePasswordAuthenticationToken("ltd", null,
+                List.of(new org.springframework.security.core.authority.SimpleGrantedAuthority(
+                    com.softropic.skillars.infrastructure.security.SecurityConstants.ROLE_LTD_ADMIN))));
+        try {
+            assertThatThrownBy(() -> sessionPackPaymentService.closeAttemptByAdmin(77L, ADMIN_ID, "stuck"))
+                .isInstanceOf(org.springframework.security.access.AccessDeniedException.class);
+            verify(attemptRepository, never()).findById(any());
+        } finally {
+            org.springframework.security.core.context.SecurityContextHolder.clearContext();
+        }
     }
 }

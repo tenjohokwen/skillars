@@ -58,6 +58,25 @@ class FileStorageServiceIT extends BaseStorageIT {
         fileStorageObjectRepository.deleteAll();
     }
 
+    /**
+     * A server-side write reads back byte for byte. Regression: with the AWS SDK's default checksum mode, SeaweedFS
+     * stored the aws-chunked framing as the object ("28c;chunk-signature=..." around the data), so every
+     * storeBytes caller (GDPR exports, safeguarding uploads) wrote a corrupt file. The async transfer-manager path
+     * (S3StorageServiceIT) was never affected, which is why only this path needs the check.
+     */
+    @Test
+    void storeBytes_thenDownloadBytes_returnsTheSameBytes() {
+        byte[] content = new byte[3000];
+        for (int i = 0; i < content.length; i++) {
+            content[i] = (byte) (i * 31);
+        }
+        String key = "it-roundtrip/" + java.util.UUID.randomUUID() + ".bin";
+
+        fileStorageService.storeBytes(content, key, "application/octet-stream");
+
+        assertThat(fileStorageService.downloadBytes(key)).isEqualTo(content);
+    }
+
     @Test
     void signUpload_validRequest_returnsUrlAndKey() {
         SignUploadRequest request = new SignUploadRequest(

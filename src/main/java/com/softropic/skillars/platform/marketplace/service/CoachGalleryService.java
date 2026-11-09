@@ -106,7 +106,7 @@ public class CoachGalleryService {
      * coach remove the row). Unknown or another coach's item: 404, never confirming it exists.
      */
     @Transactional
-    public void deleteItem(Long userId, UUID mediaId, String currentUserLogin) {
+    public void deleteItem(Long userId, UUID mediaId) {
         CoachProfile profile = requireProfile(userId);
         lockProfile(profile.getId());
 
@@ -116,11 +116,11 @@ public class CoachGalleryService {
 
         if (isStorageKey(item.getFileUrl())) {
             try {
-                fileStorageService.softDelete(item.getFileUrl(), currentUserLogin);
+                fileStorageService.softDelete(item.getFileUrl());
             } catch (StorageObjectNotFoundException e) {
                 log.warn("deleteGalleryItem: storage object for coachId={} already gone", profile.getId());
             } catch (AuthorizationException e) {
-                log.warn("deleteGalleryItem: storage object for coachId={} has a stale created_by", profile.getId());
+                log.warn("deleteGalleryItem: storage object for coachId={} is owned by someone else", profile.getId());
             }
         }
         coachMediaItemRepository.delete(item);

@@ -417,6 +417,18 @@ const routes = [
         name: 'unsubscribe',
         component: () => import('pages/UnsubscribePage.vue'),
       },
+      // skillars-deferred-172: the email-change confirm and undo links. Public (no meta): the token is the
+      // credential, and after either one this browser is signed out.
+      {
+        path: 'email-change/confirm',
+        name: 'email-change-confirm',
+        component: () => import('pages/EmailChangeConfirmPage.vue'),
+      },
+      {
+        path: 'email-change/undo',
+        name: 'email-change-undo',
+        component: () => import('pages/EmailChangeUndoPage.vue'),
+      },
 
       // Admin pages (auth required)
       {

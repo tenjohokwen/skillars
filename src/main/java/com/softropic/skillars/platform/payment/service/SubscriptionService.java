@@ -85,6 +85,7 @@ public class SubscriptionService {
     // skillars-deferred-169: parked webhook events (AC4) and the unrecoverable-upgrade record (AC6).
     private final StripePendingSubscriptionEventRepository pendingSubscriptionEventRepository;
     private final PaymentRecoveryRecorder paymentRecoveryRecorder;
+    private final StripeCustomerCardWrites stripeCustomerCardWrites;
     private final MeterRegistry meterRegistry;
 
     /** Self-reference so @Transactional on persist* methods is honoured via the Spring proxy. */
@@ -316,9 +317,24 @@ public class SubscriptionService {
             if (pendingDowngrade) {
                 restoreCoachPriceAndVoidDowngrade(coachId, stripeSubId, currentTier);
             }
-            Subscription updated = updateStripePrice(stripeSubId, newPriceId, true, "sub-upgrade-",
+            StripeClient.TierUpdate change = updateStripePrice(stripeSubId, newPriceId, true, "sub-upgrade-",
                 "COACH_UPGRADE", coachId);
-            self.persistCoachTierUpgrade(coachId, stripeSubId, targetTier, updated);
+            Subscription updated = change.subscription();
+            final boolean granted;
+            try {
+                granted = self.persistCoachTierUpgrade(coachId, stripeSubId, targetTier, updated, change.sent());
+            } catch (RuntimeException e) {
+                if (change.sent()) {
+                    recordUngrantedUpgrade("COACH", String.valueOf(coachId), stripeSubId, targetTier, updated);
+                }
+                throw e;
+            }
+            if (granted && !change.sent()) {
+                // skillars-deferred-176 AC5 (RS07c): after commit, so a rolled-back persist never resolves the record. Only
+                // when nothing was billed now (round-2 V1): Stripe already carried the price an earlier, ungranted upgrade
+                // paid for, so this grant honours that charge. A grant that billed again leaves the earlier one owed back.
+                paymentRecoveryRecorder.resolveUngrantedUpgrades(stripeSubId, targetTier);
+            }
         } else if (newRank == currentRank) {
             if (pendingDowngrade) {
                 restoreCoachPriceAndVoidDowngrade(coachId, stripeSubId, currentTier);
@@ -356,7 +372,9 @@ public class SubscriptionService {
      * error-level tag line, the alert source that works even if the insert fails, and a metric; (2) a best-effort durable row in a
      * REQUIRES_NEW on the payment routed pool (the caller holds the subscription row lock; the table is FK-free so it cannot
      * deadlock on it). Nothing here may fail the request: a thrown insert would roll back this transaction after Stripe has billed,
-     * and a client retry is a NEW upgrade key - a second proration.
+     * and a client retry is a NEW upgrade key - a second proration. skillars-deferred-175 AC3 (RS07b): {@code change*Tier} also calls
+     * this when {@code persist*TierUpgrade} throws after Stripe upgraded (row gone, DB error, lock timeout), then rethrows; the
+     * recorder skips a second open row for the same subscription and target tier, so client retries do not stack rows.
      */
     private void recordUngrantedUpgrade(String kind, String subscriberRef, String stripeSubId, String targetTier,
                                         Subscription updated) {
@@ -371,13 +389,22 @@ public class SubscriptionService {
         }
     }
 
+    /**
+     * Returns true when the tier was granted, false when the subscription was superseded (recorded as ungranted).
+     * {@code billed}: skillars-deferred-176 review round 3, false when Stripe already carried the price and this attempt sent
+     * no update. Nothing was charged, so nothing is recorded: the earlier attempt's row already holds that charge, and the
+     * subscription's latest invoice may by now be a renewal an operator must not refund.
+     */
     @Transactional
-    public void persistCoachTierUpgrade(UUID coachId, String stripeSubId, String newTier, Subscription updated) {
+    public boolean persistCoachTierUpgrade(UUID coachId, String stripeSubId, String newTier, Subscription updated,
+                                           boolean billed) {
         PaymentCoachSubscription sub = paymentCoachSubscriptionRepository.findByCoachIdForUpdate(coachId)
             .orElseThrow(() -> new PaymentGatewayException("payment.subscription.notFound"));
         if (!Objects.equals(stripeSubId, sub.getStripeSubscriptionId())) {
-            recordUngrantedUpgrade("COACH", String.valueOf(coachId), stripeSubId, newTier, updated);
-            return;
+            if (billed) {
+                recordUngrantedUpgrade("COACH", String.valueOf(coachId), stripeSubId, newTier, updated);
+            }
+            return false;
         }
         coachSubscriptionChangeRepository.voidAllPendingForCoach(coachId, Instant.now());
         sub.setTier(newTier);
@@ -392,6 +419,7 @@ public class SubscriptionService {
         // temporary staleness this defer creates.
         syncMarketplaceTierDeferrable(coachId, newTier, "COACH_TIER_UPGRADE_SYNC_DEFERRED");
         log.info("[COACH_TIER_UPGRADED coachId={} newTier={}]", coachId, newTier);
+        return true;
     }
 
     @Transactional
@@ -613,9 +641,24 @@ public class SubscriptionService {
             if (pendingDowngrade) {
                 restorePlayerPriceAndVoidDowngrade(playerId, stripeSubId, currentTier, interval);
             }
-            Subscription updated = updateStripePrice(stripeSubId, newPriceId, true, "sub-upgrade-",
+            StripeClient.TierUpdate change = updateStripePrice(stripeSubId, newPriceId, true, "sub-upgrade-",
                 "PLAYER_UPGRADE", playerId);
-            self.persistPlayerTierUpgrade(playerId, stripeSubId, targetTier, updated);
+            Subscription updated = change.subscription();
+            final boolean granted;
+            try {
+                granted = self.persistPlayerTierUpgrade(playerId, stripeSubId, targetTier, updated, change.sent());
+            } catch (RuntimeException e) {
+                if (change.sent()) {
+                    recordUngrantedUpgrade("PLAYER", String.valueOf(playerId), stripeSubId, targetTier, updated);
+                }
+                throw e;
+            }
+            if (granted && !change.sent()) {
+                // skillars-deferred-176 AC5 (RS07c): after commit, so a rolled-back persist never resolves the record. Only
+                // when nothing was billed now (round-2 V1): Stripe already carried the price an earlier, ungranted upgrade
+                // paid for, so this grant honours that charge. A grant that billed again leaves the earlier one owed back.
+                paymentRecoveryRecorder.resolveUngrantedUpgrades(stripeSubId, targetTier);
+            }
         } else if (newRank == currentRank) {
             if (pendingDowngrade) {
                 restorePlayerPriceAndVoidDowngrade(playerId, stripeSubId, currentTier, interval);
@@ -641,13 +684,22 @@ public class SubscriptionService {
         log.info("[PLAYER_PENDING_CHANGES_VOIDED playerId={} count={}]", playerId, voided);
     }
 
+    /**
+     * Returns true when the tier was granted, false when the subscription was superseded (recorded as ungranted).
+     * {@code billed}: skillars-deferred-176 review round 3, false when Stripe already carried the price and this attempt sent
+     * no update. Nothing was charged, so nothing is recorded: the earlier attempt's row already holds that charge, and the
+     * subscription's latest invoice may by now be a renewal an operator must not refund.
+     */
     @Transactional
-    public void persistPlayerTierUpgrade(Long playerId, String stripeSubId, String newTier, Subscription updated) {
+    public boolean persistPlayerTierUpgrade(Long playerId, String stripeSubId, String newTier, Subscription updated,
+                                            boolean billed) {
         PaymentPlayerSubscription sub = paymentPlayerSubscriptionRepository.findByPlayerIdForUpdate(playerId)
             .orElseThrow(() -> new PaymentGatewayException("payment.subscription.notFound"));
         if (!Objects.equals(stripeSubId, sub.getStripeSubscriptionId())) {
-            recordUngrantedUpgrade("PLAYER", String.valueOf(playerId), stripeSubId, newTier, updated);
-            return;
+            if (billed) {
+                recordUngrantedUpgrade("PLAYER", String.valueOf(playerId), stripeSubId, newTier, updated);
+            }
+            return false;
         }
         playerSubscriptionChangeRepository.voidAllPendingForPlayer(playerId, Instant.now());
         sub.setTier(newTier);
@@ -656,6 +708,7 @@ public class SubscriptionService {
         }
         paymentPlayerSubscriptionRepository.save(sub);
         log.info("[PLAYER_TIER_UPGRADED playerId={} newTier={}]", playerId, newTier);
+        return true;
     }
 
     @Transactional
@@ -756,15 +809,39 @@ public class SubscriptionService {
      * outbox. The Stripe calls run after commit, off the request path ({@link PaymentMethodSyncOutboxHandler}),
      * so a Stripe outage neither fails nor slows the save, and a failed sync is retried by the outbox.
      * The caller must have created the {@code stripe_customers} row first (that needs a Stripe call).
+     *
+     * <p>skillars-deferred-176 review round 6 (AC3): a one-column write under the row lock, never onto an erased payer's
+     * row, so an erasure committing during the save does not get its NULLed card written back. Nothing is enqueued
+     * when the payer was erased.
      */
     @Transactional
     public void savePaymentMethodAndScheduleSync(Long userId, String paymentMethodId) {
         StripeIdFormat.requirePaymentMethodId(paymentMethodId);
-        StripeCustomer customer = stripeCustomerRepository.findById(userId)
-            .orElseThrow(() -> new IllegalStateException("stripe_customers row missing for userId=" + userId));
-        customer.setStripePaymentMethodId(paymentMethodId);
-        stripeCustomerRepository.save(customer);
+        if (!stripeCustomerRepository.existsById(userId)) {
+            throw new IllegalStateException("stripe_customers row missing for userId=" + userId);
+        }
+        if (stripeCustomerCardWrites.writeCardIfPayerLive(userId, paymentMethodId)) {
+            paymentMethodSyncOutboxSupport.enqueueSync(userId, paymentMethodId);
+        }
+    }
+
+    /**
+     * skillars-deferred-174 AC4 (RS09c): the card sync of a successful pack purchase. Re-applies the purchase's card only
+     * while the column holds that card or {@code previousCard} (compare-and-set), and enqueues the subscription sync in
+     * the same transaction. Returns false, writing and enqueuing nothing, when another card was saved meanwhile.
+     *
+     * <p>skillars-deferred-176 AC3 (RS09h): also false when the payer was erased. The row lock is taken and the user read
+     * before the compare-and-set, because a NULL previous card would otherwise match the column an erasure just NULLed.
+     */
+    @Transactional
+    public boolean reapplyPaymentMethodAndScheduleSync(Long userId, String previousCard, String paymentMethodId) {
+        StripeIdFormat.requirePaymentMethodId(paymentMethodId);
+        if (!stripeCustomerCardWrites.lockIfPayerLive(userId)
+                || stripeCustomerRepository.reapplyPaymentMethod(userId, previousCard, paymentMethodId) != 1) {
+            return false;
+        }
         paymentMethodSyncOutboxSupport.enqueueSync(userId, paymentMethodId);
+        return true;
     }
 
     /**
@@ -1411,13 +1488,21 @@ public class SubscriptionService {
     /**
      * Job duty (d): purge parked events past the retention window. Never-linked rows exist by design (a duplicate subscription that
      * {@code cancelDuplicateSubscription} cancelled was never linked), so a purge is info-level with a metric, not a warning.
+     * skillars-deferred-175 AC2 (RS-poison): a linked row is kept (its apply keeps failing; the ParkedSubscriptionEventsStuck alert
+     * watches it), with one warn line per run that kept any rather than a per-row error every cycle.
      */
     public int purgeStaleParkedEvents() {
         long days = configService.getBoundedLong(ConfigBounds.PENDING_SUBSCRIPTION_EVENT_RETENTION_DAYS);
-        int purged = pendingSubscriptionEventRepository.purgeOlderThan(Instant.now().minus(days, java.time.temporal.ChronoUnit.DAYS));
+        Instant cutoff = Instant.now().minus(days, java.time.temporal.ChronoUnit.DAYS);
+        int purged = pendingSubscriptionEventRepository.purgeOlderThan(cutoff);
         if (purged > 0) {
             meterRegistry.counter("payment.subscription.parked_events_purged_unapplied").increment(purged);
             log.info("Purged parked subscription events that never linked: count={} retentionDays={}", purged, days);
+        }
+        long kept = pendingSubscriptionEventRepository.countLinkedOlderThan(cutoff);
+        if (kept > 0) {
+            log.warn("[STRIPE_WEBHOOK_PARKED_LINKED_NOT_PURGED] count={} retentionDays={} — linked parked events past retention are kept; "
+                + "see the ParkedSubscriptionEventsStuck runbook", kept, days);
         }
         return purged;
     }
@@ -1461,6 +1546,7 @@ public class SubscriptionService {
         paymentCoachSubscriptionRepository.findByStripeSubscriptionIdForUpdate(stripeSubscriptionId)
             .ifPresent(sub -> {
                 if (isStaleEvent(sub.getLastStripeEventAt(), eventCreated, "COACH", stripeSubscriptionId)) return;
+                if (isStatusRegression(sub.getStatus(), newStatus, "COACH", stripeSubscriptionId)) return;
                 String entitledBefore = SubscriptionEntitlement.effectiveCoachTier(sub.getTier(), sub.getStatus());
                 if (newStatus != null) applyStripeStatus(sub::getPastDueSince, sub::setPastDueSince,
                     sub::setStatus, normalizeStripeStatus(newStatus));
@@ -1474,6 +1560,7 @@ public class SubscriptionService {
         paymentPlayerSubscriptionRepository.findByStripeSubscriptionIdForUpdate(stripeSubscriptionId)
             .ifPresent(sub -> {
                 if (isStaleEvent(sub.getLastStripeEventAt(), eventCreated, "PLAYER", stripeSubscriptionId)) return;
+                if (isStatusRegression(sub.getStatus(), newStatus, "PLAYER", stripeSubscriptionId)) return;
                 if (newStatus != null) applyStripeStatus(sub::getPastDueSince, sub::setPastDueSince,
                     sub::setStatus, normalizeStripeStatus(newStatus));
                 if (periodEnd != null) sub.setCurrentPeriodEnd(periodEnd);
@@ -1573,6 +1660,21 @@ public class SubscriptionService {
         if (lastApplied != null && eventCreated != null && eventCreated.isBefore(lastApplied)) {
             log.info("[{}_STRIPE_EVENT_STALE stripeSubId={} eventCreated={} lastApplied={}] ignored",
                 kind, stripeSubscriptionId, eventCreated, lastApplied);
+            return true;
+        }
+        return false;
+    }
+
+    /**
+     * skillars-deferred-175 AC1 (RS05c): Stripe's {@code incomplete} exists only before the first payment, and creation never
+     * persists it ({@code ERROR_IF_INCOMPLETE}), so an update carrying it for a row that is not INCOMPLETE is an old event: a
+     * parked one replayed after the link (whose {@code lastStripeEventAt} is still null), or a live one created in the same second
+     * as the last applied. The whole event is ignored; a parked row is still claimed (deleted) by its caller.
+     */
+    private boolean isStatusRegression(String localStatus, String stripeStatus, String kind, String stripeSubscriptionId) {
+        if ("INCOMPLETE".equals(normalizeStripeStatus(stripeStatus)) && !"INCOMPLETE".equals(localStatus)) {
+            log.warn("[STRIPE_WEBHOOK_STATUS_REGRESSION_IGNORED] kind={} stripeSubId={} localStatus={} eventStatus={}",
+                kind, stripeSubscriptionId, localStatus, stripeStatus);
             return true;
         }
         return false;
@@ -1755,7 +1857,7 @@ public class SubscriptionService {
     }
 
     /** Stripe price change with a per-attempt idempotency key; a declined proration charge is not granted. */
-    private Subscription updateStripePrice(String stripeSubId, String priceId, boolean chargeNow,
+    private StripeClient.TierUpdate updateStripePrice(String stripeSubId, String priceId, boolean chargeNow,
                                            String keyPrefix, String logTag, Object ownerId) {
         try {
             return stripeClient.updateSubscriptionTier(stripeSubId, priceId, chargeNow, keyPrefix + UUID.randomUUID());

@@ -36,10 +36,8 @@ class EmailTemplateFileParityTest {
     private static final Map<EmailTemplate, String> EXEMPT = Map.of(
         // Plain-text ops alerts: EmailContentRenderer takes subject/body from the data map, no template.
         EmailTemplate.NONE, "rendered without a template",
-        // No producer sends these (NotificationCatalog / AccountManagementFacade, which sends an email change
-        // as PROFILE_CHANGE); give one a body together with its producer.
+        // No producer sends this (NotificationCatalog); give it a body together with its producer.
         EmailTemplate.COACH_VISIBILITY_REDUCED, "no producer",
-        EmailTemplate.EMAIL_CHANGE, "no producer",
         // V184 (#328): the minor-video approval gate was removed; the constants stay @Deprecated so old
         // envelope rows still map, but nothing sends them and their bodies were deleted.
         EmailTemplate.VIDEO_APPROVAL_REQUESTED, "deprecated, no producer",

@@ -1,5 +1,5 @@
 {
-  "name": "Stripe — create SetupIntent (deterministic tier)",
+  "name": "Stripe — create SetupIntent (deterministic tier); the client secret ends with the customer id, so the Stripe.js stub and the provisioner can name a card that customer owns",
   "priority": 10,
   "request": {
     "method": "POST",
@@ -11,7 +11,7 @@
     "jsonBody": {
       "id": "seti_e2e_{{randomValue length=14 type='ALPHANUMERIC'}}",
       "object": "setup_intent",
-      "client_secret": "seti_e2e_{{randomValue length=14 type='ALPHANUMERIC'}}_secret_e2e",
+      "client_secret": "seti_e2e_{{randomValue length=14 type='ALPHANUMERIC'}}_secret_{{formData request.body 'form' urlDecode=true}}{{form.customer}}",
       "status": "requires_payment_method",
       "livemode": false
     }

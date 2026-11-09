@@ -20,7 +20,9 @@ public interface LoginTokenManager {
      * @param refreshSessionId skillars-deferred-167 (AC3): the id of the refresh-token rotation chain
      *     this JWT belongs to, written into the token as {@code SecurityConstants.RTKN_SESSION} so
      *     {@code JWTAuthorizationFilter} can later refuse a JWT whose chain has no live row. May be
-     *     {@code null} — the claim is then omitted and the filter's check is skipped (AC5, fail-open).
+     *     {@code null} — the claim is then omitted, and the filter refuses the token at its next DB
+     *     re-auth unless the request's own {@code rtkn} names a chain (skillars-deferred-180). Neither
+     *     caller passes {@code null} today.
      */
     void createLoginToken(HttpServletResponse res, Principal principal, UUID refreshSessionId);
 

@@ -846,7 +846,8 @@ export default {
     passwordReset: 'Your password has been reset. You can now log in with your new password.',
     emailSent: 'Please check your email for further instructions.',
     loggedOut: 'You have been logged out successfully.',
-    emailChangeInitiated: 'Email update initiated. Please check your new email for verification.',
+    emailChangeInitiated:
+      'If this address can be used, we sent a confirmation link to it. Your email changes only when you open that link (within 24 hours).',
     passwordChanged: 'Your password has been changed successfully.',
     phoneChanged: 'Your phone number has been updated.',
     addressChanged: 'Your address has been updated.',
@@ -936,7 +937,13 @@ export default {
     postalCode: 'Postal Code',
     country: 'Country',
     emailChangeWarning:
-      'Changing your email address will also change your login credentials. You will be automatically signed out and will need to log in again with your new email address.',
+      'Your sign-in email changes only after you open the confirmation link we send to the new address. You are then signed out everywhere and sign in with the new address. Your current address gets a link to undo the change for 7 days.',
+    // skillars-deferred-172: answers of PUT /api/account/email the dialog shows itself.
+    emailChange: {
+      recentChange:
+        'You changed your email recently. You can change it again after {date}. If you did not make that change, use the link we sent to your previous address.',
+      tooManyRequests: 'Too many attempts. Please try again later.',
+    },
     // skillars-deferred-139: role-gated sections on this same page — Coach (AC2/AC3), Player (AC4),
     // Parent's children (AC5). Reuses the profile-builder's own field labels (auth.coach.*) and the
     // player position labels (auth.player.*) rather than duplicating them under this namespace.
@@ -2424,6 +2431,7 @@ export default {
       updateCardCta: 'Update card',
       save: 'Save card',
       saveError: 'Could not save your card. Please try again.',
+      notOwned: 'This card could not be linked to your account. Please enter it again.',
       savedRefreshFailed:
         'Your card was saved, but we could not refresh the view. Reload to see it.',
       subscriptionNote:
@@ -2863,6 +2871,25 @@ export default {
     metricLast30Days: 'Last 30 days',
     metricAverageMs: 'Average ms',
   },
+  // skillars-deferred-172: public landing pages for the email-change confirm and undo links.
+  emailChangeLink: {
+    confirmTitle: 'Confirm your new email address',
+    confirmPrompt:
+      'Use this address to sign in to Skillars from now on? You will be signed out everywhere and sign in again with it.',
+    confirmButton: 'Confirm new email',
+    confirmed: 'Your email address is changed. Sign in with your new address.',
+    undoTitle: 'Undo the email change',
+    undoPrompt:
+      'Restore your previous email address? Everyone using your account is signed out, and you set a new password from the link we send to that address.',
+    undoButton: 'Undo the change',
+    undone:
+      'Your previous email address is restored and you have been signed out everywhere. Check that inbox to set a new password.',
+    undoneSuspended:
+      'Your previous email address is restored and you have been signed out everywhere. Your account is suspended: once it is reinstated, reset your password from the sign-in page.',
+    invalid: 'This link can no longer be used. It may have expired or been used already.',
+    missingToken: 'This link is incomplete. Open it again from the email.',
+    signIn: 'Go to sign in',
+  },
   privacy: {
     exportTitle: 'Export my data',
     exportHint:
@@ -2920,6 +2947,7 @@ export default {
     childSectionTitle: 'Privacy & data',
     errors: {
       alreadyPending: 'A request of this type is already being processed.',
+      recentEmailChange: 'You changed your email recently. This can be deleted after {date}.',
       exportInProgress: 'An export is still being prepared. Wait for it to finish before deleting.',
       activeBookings:
         'You still have bookings that are not settled: requests, upcoming sessions, or sessions waiting for confirmation, a dispute or a refund. You can delete your account once they are settled.',

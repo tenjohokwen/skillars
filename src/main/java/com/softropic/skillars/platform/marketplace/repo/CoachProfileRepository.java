@@ -69,9 +69,12 @@ public interface CoachProfileRepository
      * list stays bounded by the city's live coaches (not every historical DRAFT/DEACTIVATED profile).
      * The status list MUST mirror {@code CoachSearchSpecification.isActive()} (ACTIVE and REDUCED); a
      * hard-coded {@code status = 'ACTIVE'} here used to drop REDUCED coaches whenever a language was given.
+     * Languages are stored as picked ({@code 'English'}), so both sides are lowercased; lowercasing only the
+     * parameter matched nobody (skillars-deferred-173 RS04).
      */
     @Query(value = "SELECT id FROM marketplace.coach_profiles " +
-                   "WHERE status IN ('ACTIVE', 'REDUCED') AND lower(city) = lower(:city) AND lower(:lang) = ANY(languages)",
+                   "WHERE status IN ('ACTIVE', 'REDUCED') AND lower(city) = lower(:city) " +
+                   "AND EXISTS (SELECT 1 FROM unnest(languages) AS l WHERE lower(l) = lower(:lang))",
            nativeQuery = true)
     List<UUID> findIdsByLanguage(@Param("lang") String lang, @Param("city") String city);
 

@@ -49,7 +49,10 @@ public final class AppEndpoints {
         "/api/video/webhooks/**",         // HMAC signature is the auth mechanism; no session required
         "/api/payment/webhooks/stripe",   // Stripe signature is the auth mechanism; no JWT available
         "/api/payment/webhooks/stripe/connect", // Connect endpoint, own Stripe signing secret; no JWT available
-        "/api/notifications/unsubscribe"  // RFC 8058 one-click unsubscribe: the HMAC-signed token is the auth mechanism
+        "/api/notifications/unsubscribe", // RFC 8058 one-click unsubscribe: the HMAC-signed token is the auth mechanism
+        // skillars-deferred-172: email-change confirm/undo links; the single-use token in the body is the credential.
+        "/api/email-change/confirm",
+        "/api/email-change/undo"
     );
     // "/manage/health/smoke" is a distinct exact path from "/manage/health" (Ant/PathPattern exact
     // match, no prefix relationship) — Docker's own HEALTHCHECK and .github/workflows/deploy.yml both

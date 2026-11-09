@@ -50,7 +50,7 @@ _This file contains critical rules and patterns that AI agents must follow when 
 
 - **Resource Naming:** REST controllers must be suffixed with `Resource` and placed in an `api` package.
 - **REST Conventions:** Use `@PatchMapping` for partial updates; return `204 No Content` for body-less success.
-- **Security:** Every resource method **must** have a `@PreAuthorize` annotation using `SecurityConstants`. For file deletion (`DELETE /api/storage/**`), the service layer must also verify that the authenticated user owns the file via `fso.getCreatedBy()`.
+- **Security:** Every resource method **must** have a `@PreAuthorize` annotation using `SecurityConstants`. For file deletion (`DELETE /api/storage/**`), the service layer must also verify that the authenticated user owns the file via `fso.getOwnerId()` (the caller's business id, stable across email changes; `created_by` holds the login at upload time and must not be used for ownership).
 - **Observability:** Use `@Observed(name = "...")` on resources to enable metrics.
 - **Validation:** Use Jakarta Validation (`@NotBlank`, etc.) on all request DTO records.
 - **I18n:** All user-facing text must be externalized via `vue-i18n`.

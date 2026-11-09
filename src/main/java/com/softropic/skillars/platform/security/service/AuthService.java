@@ -204,8 +204,8 @@ public class AuthService {
      *       the outer transaction holds locked waits for a lock only that outer transaction can release,
      *       and Postgres cannot see the cycle because the outer side is blocked in Java, not in the
      *       database: it surfaces as {@code lock_timeout} / SQLState 55P03, i.e. a 409 where a 401 was
-     *       meant. {@code markAllUsedByUserId} (a bulk {@code UPDATE} with no {@code used} predicate, so it
-     *       matches the locked row too) and {@code terminateSession} are both on that list.</li>
+     *       meant. {@code markAllUsedByUserId} (a bulk {@code UPDATE} whose only predicate besides the user is
+     *       {@code revoked_at IS NULL}, so it matches the locked row too) and {@code terminateSession} are both on that list.</li>
      * </ul>
      * Deciding under the lock and acting after it satisfies both without needing {@code noRollbackFor} or
      * an in-transaction twin of every revoke (a {@code MANDATORY} revoke would simply be rolled back by the

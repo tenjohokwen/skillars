@@ -176,25 +176,18 @@ cookie therefore kept working for as long as its holder kept making requests.
   unused, unrevoked and unexpired, and refuses the JWT when it does not. One indexed existence
   query, on that branch only — the TTL-only path stays database-free by design, so exposure is
   bounded by `DB_REFRESH_TOKEN_INTERVAL` (5 min), the same bound a locked account has always had.
-- **Fail-open on a missing claim, deliberately.** A JWT minted before this story carries no `rtsid`,
-  neither mint path can invent one, and refusing all of them would sign out every live session the
-  moment the story deploys.
-  A post-deploy token normally carries the claim — but **a rolling deploy can strip it permanently**. An
-  instance still running the previous release rebuilds the claim map without `rtsid` (it does not know the
-  claim) and re-signs, and a token that has lost the claim would never be checked again. The filter
-  therefore re-derives the chain id from the request's own `rtkn` cookie whenever the claim is absent,
-  scoped to the authorised user, which puts it back on the next DB-reauth cycle. The same repair covers a
-  rollback, and it shrinks the pre-deploy gap for any session whose chain has rotated since.
-  **That exposure has no time bound, for a token presented WITHOUT its `rtkn` cookie.** With the cookie
-  the claim is repaired, as described above. Without it there is nothing to derive from: the DB-reauth
-  path passes the missing value straight back and the TTL-only path omits what it cannot read, while both
-  carry `dbRToken` and `sessIat` forward unchanged (only `exp` is fresh) — and nothing else on either path consults `refresh_tokens`.
-  Omitting a cookie costs an attacker nothing, which is why the repair narrows this gap without closing
-  it.
-  So a holder who makes one request every 15 minutes keeps that session alive indefinitely, long after
-  its chain is revoked, expired and swept. A stolen **pre-deploy** `potc` is therefore a permanent
-  session until the flip to fail-closed, and that flip cannot be scheduled by "wait 7 days" either; it
-  needs a deliberate trigger, filed as an owner decision in `deferred-work.md`.
+- **Fail-closed on a missing claim, since skillars-deferred-180.** Story 167 first skipped the check for a
+  JWT with no `rtsid` (one minted before that story), so that deploying it would not sign out every live
+  session. That left a token presented WITHOUT its `rtkn` cookie unbounded: a holder making one request every
+  15 minutes kept it alive past logout, expiry and the sweep. The browser binding (`isTokenFixed`) does not
+  stop that holder, because everything it compares (User-Agent, `bcookie`/`fcookie`, `ION`) is sent by the
+  client and travels with a copied cookie jar. The owner chose the flip on 2026-11-08, before go-live.
+  A post-deploy token normally carries the claim, but **a rolling deploy can strip it**: an instance still
+  running an older release rebuilds the claim map without `rtsid` and re-signs. The filter therefore
+  re-derives the chain id from the request's own `rtkn` cookie whenever the claim is absent, scoped to the
+  authorised user, which puts it back on the next DB-reauth cycle (the same repair covers a rollback). Only
+  when that also finds nothing (no `rtkn`, someone else's, or a pre-V225 chain that never rotated) is the
+  token refused, with the same 401 as a dead chain.
 - **The refresh chain is now a session cap — and it binds the SPA, not API clients.** Once a chain has
   no live row, the session ends within one DB-reauth cycle, where an access token used to slide
   indefinitely as long as the user kept clicking. Who that actually affects is the opposite of what it

@@ -129,9 +129,10 @@ class CoachMarketplaceResourceIT extends AbstractIntegrationTest {
                 coachProfileId3
             );
 
-            // Language for coach 1 — set via UPDATE since profile insert uses DEFAULT for languages
+            // Language for coach 1 — set via UPDATE since profile insert uses DEFAULT for languages. Stored
+            // capitalised, as the profile builder's picker saves it (skillars-deferred-173 RS04).
             jdbcTemplate.update(
-                "UPDATE marketplace.coach_profiles SET languages = '{english}' WHERE id = ?",
+                "UPDATE marketplace.coach_profiles SET languages = '{English}' WHERE id = ?",
                 coachProfileId1
             );
 
@@ -229,6 +230,24 @@ class CoachMarketplaceResourceIT extends AbstractIntegrationTest {
         // Only coach 1 has english language set
         assertThat(coaches).hasSize(1);
         assertThat(coaches.get(0).get("displayName")).isEqualTo("Alice Frankfurt");
+    }
+
+    /**
+     * skillars-deferred-173 (RS04): the lookup lowercased only the searched language, so a stored 'English'
+     * matched no search at all. Any casing of the search now finds it, and another language still does not.
+     */
+    @Test
+    void searchCoaches_filterByLanguage_ignoresCaseOnBothSides() {
+        for (String language : List.of("english", "ENGLISH", "English")) {
+            List<Map<String, Object>> coaches = (List<Map<String, Object>>) httpTestClient.makeHttpRequest(
+                baseUrl() + SEARCH_ENDPOINT + "?city=Frankfurt&language=" + language,
+                HttpMethod.GET, null, clientHeaders(), Map.class).getBody().get("coaches");
+            assertThat(coaches).as(language).extracting(c -> c.get("displayName")).containsExactly("Alice Frankfurt");
+        }
+        Map<?, ?> french = httpTestClient.makeHttpRequest(
+            baseUrl() + SEARCH_ENDPOINT + "?city=Frankfurt&language=French",
+            HttpMethod.GET, null, clientHeaders(), Map.class).getBody();
+        assertThat((Integer) french.get("totalElements")).isZero();
     }
 
     /**

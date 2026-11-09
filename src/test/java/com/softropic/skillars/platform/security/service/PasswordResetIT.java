@@ -96,6 +96,18 @@ public class PasswordResetIT extends AbstractIntegrationTest {
 
     @Test
     @Sql(scripts = {"/sql/authorityData.sql", "/sql/userData.sql", "/sql/secData.sql"})
+    void testPasswordResetInit_TypedInAnyCasing_FindsTheAccount() {
+        // skillars-deferred-172 AC1: addresses are stored lowercased; the typed values match like sign-in does.
+        changePasswordDto.setCurrentEmail("Me@Yahoo.COM");
+        changePasswordDto.setLoginId("ME@yahoo.com");
+
+        accountManagementFacade.sendPasswordResetMail(changePasswordDto);
+
+        assertThat(userRepository.findOneByEmail("me@yahoo.com").orElseThrow().getResetKey()).isNotBlank();
+    }
+
+    @Test
+    @Sql(scripts = {"/sql/authorityData.sql", "/sql/userData.sql", "/sql/secData.sql"})
     void testFinishPasswordReset_WithInvalidKey() {
         KeyAndPasswordDto keyAndPasswordDto = new KeyAndPasswordDto("invalidKey", "newPassword");
         

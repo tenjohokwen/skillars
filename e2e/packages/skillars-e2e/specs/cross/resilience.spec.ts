@@ -7,6 +7,7 @@ import { t } from '../../src/i18n.js'
 import { R } from '../../src/routes.js'
 import {
   BookingRequestScreen,
+  MarketplaceScreen,
   CoachPublicProfileScreen,
   PacksDashboardScreen,
   ParentDashboardScreen,
@@ -266,7 +267,8 @@ test.describe('X · Network and navigation', () => {
       await expect(fp.getByTestId('pack-card').first()).toBeVisible()
 
       // A guest sent from a guarded route to login: Back leaves the app's guard, it does not bounce forever.
-      await page.goto(suite.routing.toUrl(R.marketplace))
+      // Wait for the marketplace to be up, so the in-app hash change is a navigation the router sees.
+      await new MarketplaceScreen(page, suite).open()
       await page.evaluate((hash) => (window.location.hash = hash), `#${R.parentDashboard}`)
       await expect.poll(() => routeOf(page)).toBe(R.login)
       await page.goBack()

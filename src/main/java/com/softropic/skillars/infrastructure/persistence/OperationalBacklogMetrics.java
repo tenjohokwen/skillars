@@ -36,11 +36,15 @@ import java.util.concurrent.atomic.AtomicReference;
  * after seconds instead of holding a pooled connection indefinitely.
  *
  * <p>Raw SQL because this reads across module schemas and only ever reports. Each branch reads an
- * indexed status or a table that drains (the outboxes), so the poll stays cheap as bookings grow. A
+ * indexed status or a table that drains (the outboxes, the parked subscription events), so the poll stays cheap
+ * as bookings grow. {@code parked_events_linked} also semi-joins the coach and player subscription tables on
+ * their unindexed {@code stripe_subscription_id}: one row per subscriber, small, and only for the parked rows. A
  * booking's age runs from when it entered the waiting status (its last update, or the confirmation request),
  * not from creation, which can be weeks earlier.
  * {@code outbox_stuck}'s 10 mirrors {@code OutboxService.STUCK_ATTEMPTS_THRESHOLD}. {@code payouts} /
  * {@code FROZEN} only counts payouts already past their release date: until then the freeze delays nothing.
+ * {@code parked_events_linked} counts parked Stripe subscription events whose subscription is linked: the job drains
+ * those within minutes, so one that stays is an apply that keeps failing (skillars-deferred-175).
  */
 @Component
 public class OperationalBacklogMetrics {
@@ -92,6 +96,12 @@ public class OperationalBacklogMetrics {
         UNION ALL
         SELECT 'pack_attempts', status, COUNT(*), EXTRACT(EPOCH FROM now() - MIN(created_at))
           FROM payment.session_pack_purchase_attempts WHERE status IN ('IN_PROGRESS', 'UNKNOWN', 'UNRECONCILED') GROUP BY status
+        UNION ALL
+        SELECT 'parked_events_linked', 'all', COUNT(*), EXTRACT(EPOCH FROM now() - MIN(e.created_at))
+          FROM payment.stripe_pending_subscription_events e
+         WHERE EXISTS (SELECT 1 FROM payment.coach_subscriptions c WHERE c.stripe_subscription_id = e.stripe_subscription_id)
+            OR EXISTS (SELECT 1 FROM payment.player_subscriptions p WHERE p.stripe_subscription_id = e.stripe_subscription_id)
+        HAVING COUNT(*) > 0
         """;
 
     private static final int DEFAULT_QUERY_TIMEOUT_SECONDS = 10;

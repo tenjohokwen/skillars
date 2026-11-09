@@ -128,6 +128,7 @@ import {
   sanitizePreview,
 } from 'src/api/marketplace.api'
 import { useErrorHandler } from 'src/composables/useErrorHandler'
+import { COACH_LANGUAGES } from 'src/utils/coachLanguages'
 
 const props = defineProps({
   modelValue: { type: Boolean, default: false },
@@ -154,7 +155,7 @@ const dialogVisible = computed({
   set: (val) => emit('update:modelValue', val),
 })
 
-const languageOptions = ['English', 'German', 'French', 'Spanish', 'Arabic', 'Portuguese']
+const languageOptions = COACH_LANGUAGES
 
 const form = reactive({
   displayName: '',
