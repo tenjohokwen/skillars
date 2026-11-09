@@ -206,7 +206,10 @@ async function handleLogin() {
     router.push(safePath)
   } catch (err) {
     const status = err?.response?.status
-    if (status === 403) {
+    const errorKey = err?.response?.data?.errorMsg?.errorKey
+    // Pitchside AUTH-05: an account whose email was never verified is not activated, which the API reports as
+    // 401 security.accNotEnabled (ApiAdvice, DisabledException). It used to show the generic error instead.
+    if (status === 403 || errorKey === 'security.accNotEnabled') {
       accountNotVerified.value = true
     } else if (status === 429) {
       rateLimited.value = true

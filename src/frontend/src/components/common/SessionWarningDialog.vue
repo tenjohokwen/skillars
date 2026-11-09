@@ -1,6 +1,6 @@
 <template>
   <q-dialog v-model="dialogVisible" persistent>
-    <q-card style="min-width: 320px; max-width: 400px">
+    <q-card style="min-width: 320px; max-width: 400px" data-testid="session-warning-dialog">
       <q-card-section>
         <div class="text-h6 flex items-center">
           <q-icon name="warning" color="warning" size="sm" class="q-mr-sm" />
@@ -46,12 +46,19 @@
       </q-card-section>
 
       <q-card-actions align="right">
-        <q-btn flat :label="$t('auth.logout')" :disable="isRefreshing" @click="handleLogout" />
+        <q-btn
+          flat
+          :label="$t('auth.logout')"
+          :disable="isRefreshing"
+          data-testid="session-logout-btn"
+          @click="handleLogout"
+        />
         <q-btn
           color="primary"
           :label="$t('session.continueSession')"
           :loading="isRefreshing"
           :disable="isRefreshing"
+          data-testid="session-continue-btn"
           @click="handleRefresh"
         />
       </q-card-actions>
