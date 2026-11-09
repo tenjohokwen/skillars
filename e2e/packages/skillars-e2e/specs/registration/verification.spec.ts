@@ -135,7 +135,8 @@ test.describe('B · Registration — the verification email', () => {
         since: resentAt,
         timeoutMs: 30_000,
       })
-      expect(second.code(VERIFY_TOKEN)).not.toBe(first.code(VERIFY_TOKEN))
+      // A resend sends the same still-valid token again (it stays good until it expires): two mails, one link.
+      expect(second.code(VERIFY_TOKEN)).toBe(first.code(VERIFY_TOKEN))
 
       await page.goto(
         suite.routing.toUrl(
