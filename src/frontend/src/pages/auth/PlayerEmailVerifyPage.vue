@@ -97,6 +97,13 @@ onMounted(async () => {
     }
   } catch (err) {
     isVerifying.value = false
+    // Pitchside REG-13: people click the email twice. When the account can already log in, the API says so
+    // (security.emailAlreadyVerified) and the page sends them there. A used link whose account still owes the
+    // phone step stays an error with its resend path.
+    if (err.response?.data?.errorMsg?.errorKey === 'security.emailAlreadyVerified') {
+      router.replace({ path: '/login', query: { verified: 'true' } })
+      return
+    }
     canResend.value = err.response?.data?.canResend === true
     setError(err)
   }

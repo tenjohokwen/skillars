@@ -534,6 +534,28 @@ export class Provisioner {
   }
 
   /**
+   * Set a config value the admin API refuses to set, then make the app reload its config cache, and return the
+   * value it replaced. Only for the phone-OTP flag (REG-14..17, 21; owner decision 2026-11-09): the API refuses
+   * `security.registration.phone-otp-required = true` while no SMS gateway exists. SQL seam; the cache is
+   * dropped by an admin PUT of another key to its own current value (ConfigService.updateConfig invalidates the
+   * whole cache). Serial @config tests only, and always restore it.
+   */
+  async forceConfigValue(key: string, value: string): Promise<string> {
+    const sql = await this.sql()
+    const rows = await sql.query<{ value: string }>(
+      `UPDATE main.platform_config p SET value = $2::text, updated_at = now()
+         FROM (SELECT value FROM main.platform_config WHERE key = $1::varchar) old
+        WHERE p.key = $1::varchar
+        RETURNING old.value`,
+      [key, value],
+    )
+    if (rows.length !== 1) throw new Error(`No platform_config row for ${key}`)
+    const reloadKey = 'booking.batch.maxSize'
+    await this.setConfigValue(reloadKey, await this.configValue(reloadKey))
+    return rows[0]!.value
+  }
+
+  /**
    * Record a completed Stripe Identity check for a self-registered player, as the verification
    * webhook would. SQL seam: the check itself runs on a Stripe-hosted page.
    */
