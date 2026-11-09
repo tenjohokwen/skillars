@@ -129,7 +129,7 @@
 </template>
 
 <script setup>
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref, onActivated } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useProfileBuilderStore } from 'src/stores/profileBuilder.store'
 import { getOwnCoachProfile } from 'src/api/marketplace.api'
@@ -153,7 +153,12 @@ const canonicalTimezone = ref(store.selectedTimezone ?? null)
 // genuine failure.
 const timezoneResolved = ref(false)
 
-onMounted(async () => {
+// Kept alive by the builder (Pitchside ONB-03): the zone is read again each time the step is shown, since the
+// coach may have gone back to step 1 and changed it.
+onMounted(loadZone)
+onActivated(loadZone)
+
+async function loadZone() {
   // The supported-zone list is what lets us tell a usable stored zone from a legacy one the server
   // would now reject on submit. Cached per session by the store, and already warmed by Step 1 in the
   // normal flow, so this is usually free.
@@ -170,7 +175,7 @@ onMounted(async () => {
   } finally {
     timezoneResolved.value = true
   }
-})
+}
 
 /**
  * True when the coach must pick a zone themselves, because we have none or the one we have is not

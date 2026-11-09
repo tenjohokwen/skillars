@@ -59,32 +59,40 @@
         </q-banner>
 
         <div class="profile-builder__panel">
-          <ProfileBuilderStep1
-            v-if="store.currentStep === 1"
-            :loading="store.loading"
-            @submit="onStep1"
-          />
-          <ProfileBuilderStep2
-            v-else-if="store.currentStep === 2"
-            :loading="store.loading"
-            @submit="onStep2"
-          />
-          <ProfileBuilderStep3
-            v-else-if="store.currentStep === 3"
-            :loading="store.loading"
-            @submit="onStep3"
-          />
-          <ProfileBuilderStep4
-            v-else-if="store.currentStep === 4"
-            :loading="store.loading"
-            @submit="onStep4"
-          />
-          <ProfileBuilderStep5
-            v-else-if="store.currentStep === 5"
-            :loading="store.loading"
-            @submit="onStep5WithPhoto"
-            @skip="onStep5Skip"
-          />
+          <!-- Pitchside ONB-03: steps 1, 2 and 4 keep what the coach typed when they go back or forward through
+               the rail (they hold their own form state, which used to be dropped on every step change). Step 3
+               is left out on purpose: it is create-only and always starts with no pack, so that coming back can
+               never withdraw an offer the coach changed meanwhile (skillars-deferred-168, see its comment). -->
+          <keep-alive
+            :include="['ProfileBuilderStep1', 'ProfileBuilderStep2', 'ProfileBuilderStep4']"
+          >
+            <ProfileBuilderStep1
+              v-if="store.currentStep === 1"
+              :loading="store.loading"
+              @submit="onStep1"
+            />
+            <ProfileBuilderStep2
+              v-else-if="store.currentStep === 2"
+              :loading="store.loading"
+              @submit="onStep2"
+            />
+            <ProfileBuilderStep3
+              v-else-if="store.currentStep === 3"
+              :loading="store.loading"
+              @submit="onStep3"
+            />
+            <ProfileBuilderStep4
+              v-else-if="store.currentStep === 4"
+              :loading="store.loading"
+              @submit="onStep4"
+            />
+            <ProfileBuilderStep5
+              v-else-if="store.currentStep === 5"
+              :loading="store.loading"
+              @submit="onStep5WithPhoto"
+              @skip="onStep5Skip"
+            />
+          </keep-alive>
         </div>
       </div>
     </div>
