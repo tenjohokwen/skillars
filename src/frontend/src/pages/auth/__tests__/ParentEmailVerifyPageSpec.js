@@ -67,13 +67,26 @@ describe('ParentEmailVerifyPage.vue — nextStep branching (skillars-deferred-13
     expect(router.currentRoute.value.query.verified).toBe('true')
   })
 
-  it('a link already used (security.emailTokenUsed) goes to /login?verified=true, not an error (Pitchside REG-13)', async () => {
+  it('a link of an already-verified account (security.emailAlreadyVerified) goes to /login?verified=true (Pitchside REG-13)', async () => {
     parentRegistrationApi.verifyEmail.mockRejectedValue({
-      response: { status: 400, data: { errorMsg: { errorKey: 'security.emailTokenUsed' } } },
+      response: { status: 400, data: { errorMsg: { errorKey: 'security.emailAlreadyVerified' } } },
     })
     const { router } = await mountPage()
     await flushPromises()
     expect(router.currentRoute.value.path).toBe('/login')
     expect(router.currentRoute.value.query.verified).toBe('true')
+  })
+
+  it('a used link whose account still owes the phone step stays an error with resend (security.emailTokenUsed)', async () => {
+    parentRegistrationApi.verifyEmail.mockRejectedValue({
+      response: {
+        status: 400,
+        data: { canResend: true, errorMsg: { errorKey: 'security.emailTokenUsed' } },
+      },
+    })
+    const { router, wrapper } = await mountPage()
+    await flushPromises()
+    expect(router.currentRoute.value.path).not.toBe('/login')
+    expect(wrapper.find('[data-testid="email-verify-error"]').exists()).toBe(true)
   })
 })

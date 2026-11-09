@@ -139,7 +139,7 @@ public class ParentRegistrationService {
             .orElseThrow(() -> new EmailTokenException("security.emailTokenInvalid", true));
 
         if (evt.isUsed()) {
-            throw new EmailTokenException("security.emailTokenUsed", true);
+            throw usedTokenException(evt);
         }
         if (Instant.now().isAfter(evt.getExpiresAt())) {
             throw new EmailTokenException("security.emailTokenExpired", true);
@@ -207,6 +207,28 @@ public class ParentRegistrationService {
             "verify-phone", verificationTokenService.issuePhoneVerificationToken(user.getId(), "PARENT"));
     }
 
+
+    /**
+     * Pitchside REG-13: a link opened a second time. Said plainly when the account can now log in, so the page
+     * sends the user there instead of showing an error; a link whose account still owes the phone step keeps the
+     * resend path (deferred-93 P11), and a locked account is told so, as on a first visit.
+     */
+    private EmailTokenException usedTokenException(EmailVerificationToken evt) {
+        User user = userRepository.findOneById(evt.getUserId()).orElse(null);
+        if (user == null) {
+            return new EmailTokenException("security.emailTokenUsed", true);
+        }
+        if (user.isLocked()) {
+            return new EmailTokenException("security.accountLocked", false);
+        }
+        SkillarsVerificationStatus status = user.getVerificationStatus();
+        boolean phoneOtpRequired = configService.getBoolean("security.registration.phone-otp-required", true);
+        if (status == SkillarsVerificationStatus.BASIC_VERIFIED
+                || (status == SkillarsVerificationStatus.EMAIL_VERIFIED && !phoneOtpRequired)) {
+            return new EmailTokenException("security.emailAlreadyVerified", false);
+        }
+        return new EmailTokenException("security.emailTokenUsed", true);
+    }
     public void verifyPhone(Long userId, String otp) {
         // skillars-deferred-162 AC3: find the live OTP and check its expiry BEFORE touching the limiter, and
         // key the bucket on that one OTP. A missing, used or expired OTP no longer drains the budget, and a

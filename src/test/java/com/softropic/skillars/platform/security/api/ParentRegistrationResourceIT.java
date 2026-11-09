@@ -327,6 +327,46 @@ class ParentRegistrationResourceIT extends AbstractIntegrationTest {
     }
 
     @Test
+    void verifyEmail_usedTokenOfAnAccountThatCanLogIn_saysAlreadyVerified() {
+        // Pitchside REG-13: the second click on a link. The account is email-verified and, with the phone step
+        // off (the seeded config), can log in: the API says so instead of "already used, request a new one".
+        httpTestClient.makeHttpRequest(
+            baseUrl() + REGISTER_ENDPOINT,
+            HttpMethod.POST,
+            registrationBody(TEST_EMAIL),
+            jsonHeaders(),
+            Void.class
+        );
+        Long userId = jdbcTemplate.queryForObject(
+            "SELECT id FROM main.\"user\" WHERE email = ?",
+            Long.class,
+            TEST_EMAIL
+        );
+        commitWrite("UPDATE main.\"user\" SET verification_status = 'EMAIL_VERIFIED', activated = true WHERE id = ?", userId);
+        UUID usedToken = UUID.randomUUID();
+        commitWrite(
+            "INSERT INTO main.email_verification_tokens (id, user_id, token, expires_at, used) " +
+            "VALUES (999999999999993, ?, ?, ?, true)",
+            userId, usedToken, Timestamp.from(Instant.now().plus(24, ChronoUnit.HOURS))
+        );
+
+        assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
+            baseUrl() + VERIFY_EMAIL_ENDPOINT + "?token=" + usedToken,
+            HttpMethod.GET,
+            null,
+            jsonHeaders(),
+            Map.class
+        ))
+            .isInstanceOf(HttpClientErrorException.class)
+            .satisfies(e -> {
+                HttpClientErrorException ex = (HttpClientErrorException) e;
+                assertThat(ex.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+                assertThat(ex.getResponseBodyAsString()).contains("security.emailAlreadyVerified");
+                assertThat(ex.getResponseBodyAsString()).contains("\"canResend\":false");
+            });
+    }
+
+    @Test
     void verifyPhone_correctOtp_setsBasicVerified() {
         httpTestClient.makeHttpRequest(
             baseUrl() + REGISTER_ENDPOINT,
