@@ -59,32 +59,36 @@
         </q-banner>
 
         <div class="profile-builder__panel">
-          <ProfileBuilderStep1
-            v-if="store.currentStep === 1"
-            :loading="store.loading"
-            @submit="onStep1"
-          />
-          <ProfileBuilderStep2
-            v-else-if="store.currentStep === 2"
-            :loading="store.loading"
-            @submit="onStep2"
-          />
-          <ProfileBuilderStep3
-            v-else-if="store.currentStep === 3"
-            :loading="store.loading"
-            @submit="onStep3"
-          />
-          <ProfileBuilderStep4
-            v-else-if="store.currentStep === 4"
-            :loading="store.loading"
-            @submit="onStep4"
-          />
-          <ProfileBuilderStep5
-            v-else-if="store.currentStep === 5"
-            :loading="store.loading"
-            @submit="onStep5WithPhoto"
-            @skip="onStep5Skip"
-          />
+          <!-- Pitchside ONB-03: each step keeps what the coach typed when they go back or forward through the
+               rail; the steps hold their own form state, which used to be dropped on every step change. -->
+          <keep-alive>
+            <ProfileBuilderStep1
+              v-if="store.currentStep === 1"
+              :loading="store.loading"
+              @submit="onStep1"
+            />
+            <ProfileBuilderStep2
+              v-else-if="store.currentStep === 2"
+              :loading="store.loading"
+              @submit="onStep2"
+            />
+            <ProfileBuilderStep3
+              v-else-if="store.currentStep === 3"
+              :loading="store.loading"
+              @submit="onStep3"
+            />
+            <ProfileBuilderStep4
+              v-else-if="store.currentStep === 4"
+              :loading="store.loading"
+              @submit="onStep4"
+            />
+            <ProfileBuilderStep5
+              v-else-if="store.currentStep === 5"
+              :loading="store.loading"
+              @submit="onStep5WithPhoto"
+              @skip="onStep5Skip"
+            />
+          </keep-alive>
         </div>
       </div>
     </div>

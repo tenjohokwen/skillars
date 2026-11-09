@@ -2,6 +2,7 @@
   <div>
     <div class="text-label q-mb-sm">{{ t('auth.coach.step1SectionBasics') }}</div>
     <q-input
+      ref="displayNameRef"
       v-model="form.displayName"
       :label="t('auth.coach.step1DisplayName')"
       outlined
@@ -58,6 +59,7 @@
 
     <div class="text-label q-mb-sm q-mt-md">{{ t('auth.coach.step1SectionLanguages') }}</div>
     <q-select
+      ref="languagesRef"
       v-model="form.languages"
       :label="t('auth.coach.step1Languages')"
       :options="languageOptions"
@@ -157,10 +159,26 @@ onUnmounted(() => {
   if (abortController) abortController.abort()
 })
 
-function submit() {
+const displayNameRef = ref(null)
+const languagesRef = ref(null)
+
+async function submit() {
+  // Pitchside ONB-05: run the field rules, so each empty required field says so. The rules are lazy (on blur),
+  // and a Next press on an untouched form used to return silently, leaving the coach no clue why.
+  const valid = await Promise.all([
+    displayNameRef.value?.validate(),
+    languagesRef.value?.validate(),
+  ])
   // canonicalTimezone joins the existing guard: submitting without one would 400 on @NotBlank, and
   // the whole point of the picker is that the coach always has a value the server accepts.
-  if (!form.displayName || form.languages.length === 0 || !canonicalTimezone.value) return
+  if (
+    valid.includes(false) ||
+    !form.displayName ||
+    form.languages.length === 0 ||
+    !canonicalTimezone.value
+  ) {
+    return
+  }
   // Remembered so Step 4 can default to the same zone instead of re-detecting the browser.
   store.setSelectedTimezone(canonicalTimezone.value)
   emit('submit', {
