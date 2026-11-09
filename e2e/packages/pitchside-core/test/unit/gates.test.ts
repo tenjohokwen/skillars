@@ -66,14 +66,18 @@ describe('ConsoleGate', () => {
     const gate = new ConsoleGate({ mode: 'strict' })
     gate.attach(page)
     page.emit('console', consoleMessage('error', '[Server Error] before the allowance'))
-    gate.allow('[Server Error]', /offline/i)
+    gate.allow('[Server Error]', /offline/gi)
     page.emit('console', consoleMessage('error', '[Server Error] GET /api/x 500'))
     page.emit('console', consoleMessage('error', 'Network went OFFLINE'))
+    page.emit('console', consoleMessage('error', 'offline again')) // a /g pattern matches every time
     page.emit('console', consoleMessage('error', 'something else'))
+    // An uncaught exception is never allowed away, even when its text matches.
+    page.emit('pageerror', new Error('[Server Error] unhandled rejection'))
 
     expect(gate.violations().map((v) => v.text)).toEqual([
       '[Server Error] before the allowance',
       'something else',
+      '[Server Error] unhandled rejection',
     ])
   })
 

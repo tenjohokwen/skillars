@@ -94,4 +94,17 @@ describe('CoachBookingRequestsPage.vue — coach proposals (booking-request-cons
       }),
     )
   })
+
+  it('a failed refresh keeps the requests already shown; the error banner is for a list that never loaded', async () => {
+    const { wrapper, bookingStore } = mountPage([REQUEST])
+    await flushPromises()
+    bookingStore.coachRequestsError = 'booking.errors.loadFailed'
+    await flushPromises()
+    expect(wrapper.find('[data-testid="load-error"]').exists()).toBe(false)
+    expect(buttonLabels(wrapper).length).toBeGreaterThan(0)
+
+    bookingStore.coachBookingRequests = []
+    await flushPromises()
+    expect(wrapper.find('[data-testid="load-error"]').exists()).toBe(true)
+  })
 })

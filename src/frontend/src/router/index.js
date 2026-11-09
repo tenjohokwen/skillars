@@ -107,9 +107,19 @@ export default defineRouter(function (/* { store, ssrContext } */) {
   // Pitchside X-10: a page whose code cannot be fetched (offline, or a deploy replaced the chunk) used to abort the
   // navigation silently: the click did nothing. Say so, and offer a retry. The browser caches a failed module
   // import, so the retry is a full reload into the target route rather than another in-app navigation.
+  // One notice at a time, for the latest failed target; a navigation that then succeeds clears it.
+  let dismissNavigationError = null
+  const clearNavigationError = () => {
+    dismissNavigationError?.()
+    dismissNavigationError = null
+  }
+  Router.afterEach((_to, _from, failure) => {
+    if (!failure) clearNavigationError()
+  })
   Router.onError((error, to) => {
     if (!isChunkLoadError(error)) return
-    Notify.create({
+    clearNavigationError()
+    dismissNavigationError = Notify.create({
       type: 'negative',
       message: i18n.global.t('common.pageLoadFailed'),
       timeout: 0,
@@ -123,6 +133,11 @@ export default defineRouter(function (/* { store, ssrContext } */) {
             window.location.hash = `#${to.fullPath}`
             window.location.reload()
           },
+        },
+        {
+          label: i18n.global.t('common.close'),
+          color: 'white',
+          'data-testid': 'navigation-dismiss',
         },
       ],
     })

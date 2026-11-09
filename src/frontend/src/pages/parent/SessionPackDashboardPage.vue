@@ -6,8 +6,9 @@
       <q-spinner size="40px" />
     </div>
 
+    <!-- Only when nothing loaded: a failed reload after a pause keeps the packs already on screen. -->
     <LoadErrorBanner
-      v-else-if="bookingStore.packsError"
+      v-else-if="bookingStore.packsError && bookingStore.sessionPacks.length === 0"
       @retry="playerId && bookingStore.loadPlayerPacks(playerId)"
     />
 

@@ -6,8 +6,14 @@
       <q-spinner size="48px" />
     </div>
 
+    <!-- Only when nothing loaded: a failed refresh after accept/decline keeps the stale list on screen
+         (deferred-31; the store's "list may be stale" toast says so). -->
     <LoadErrorBanner
-      v-else-if="bookingStore.coachRequestsError"
+      v-else-if="
+        bookingStore.coachRequestsError &&
+        bookingStore.coachBookingRequests.length === 0 &&
+        bookingStore.coachBatchGroups.length === 0
+      "
       @retry="bookingStore.loadCoachBookingRequests()"
     />
 

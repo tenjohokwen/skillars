@@ -75,7 +75,9 @@ export class ConsoleGate {
   /**
    * Accept these messages for the rest of this test only: for a spec that provokes an error on purpose (a 500
    * from a stubbed endpoint, a page taken offline) and asserts how the app copes. The gate is test-scoped, so
-   * the allowance never leaks into another test. Messages recorded before the call still count.
+   * the allowance never leaks into another test. Messages recorded before the call still count. It covers
+   * console.error only: an uncaught exception (pageerror) is still a violation, so a spec that provokes a 500
+   * does not also hide an unhandled rejection in the code coping with it.
    */
   allow(...patterns: (string | RegExp)[]): void {
     this.allowed.push(...patterns)
@@ -103,9 +105,15 @@ export class ConsoleGate {
   }
 
   private record(violation: ConsoleViolation): void {
-    const ignored = [...(this.options.ignore ?? []), ...this.allowed].some((rule) =>
-      typeof rule === 'string' ? violation.text.includes(rule) : rule.test(violation.text),
-    )
+    const rules = [
+      ...(this.options.ignore ?? []),
+      ...(violation.kind === 'console.error' ? this.allowed : []),
+    ]
+    const ignored = rules.some((rule) => {
+      if (typeof rule === 'string') return violation.text.includes(rule)
+      rule.lastIndex = 0 // a /g or /y pattern would otherwise resume where its last match ended
+      return rule.test(violation.text)
+    })
     if (!ignored) this.found.push(violation)
   }
 }
