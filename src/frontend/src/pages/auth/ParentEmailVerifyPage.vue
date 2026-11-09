@@ -96,6 +96,12 @@ onMounted(async () => {
     }
   } catch (err) {
     isVerifying.value = false
+    // Pitchside REG-13: people click the email twice. A used link means this address was verified by the
+    // first click, so say that and send them to log in, instead of an error asking for a new link.
+    if (err.response?.data?.errorMsg?.errorKey === 'security.emailTokenUsed') {
+      router.replace({ path: '/login', query: { verified: 'true' } })
+      return
+    }
     canResend.value = err.response?.data?.canResend === true
     setError(err)
   }

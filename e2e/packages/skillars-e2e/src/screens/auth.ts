@@ -155,6 +155,31 @@ export class EmailVerifyScreen extends Screen {
   resend = () => this.tid('email-verify-resend-btn')
 }
 
+/** The phone-OTP step (only reached with security.registration.phone-otp-required on). */
+export class PhoneVerifyScreen extends Screen {
+  readonly route: string
+  readonly readyTestId = 'phone-verify-title'
+
+  constructor(
+    page: Page,
+    context: ScreenContext,
+    readonly kind: AccountKind,
+  ) {
+    super(page, context)
+    this.route = REGISTRATION[kind].verifyPhone
+  }
+
+  digits = () => this.tid('phone-verify-otp-digit')
+  submitting = () => this.tid('phone-verify-submitting')
+  error = () => this.tid('phone-verify-error')
+  resend = () => this.tid('phone-verify-resend-btn')
+
+  /** Enter a code box by box (the sixth digit submits it). REG-14 drives the keyboard's own advance instead. */
+  async typeCode(code: string): Promise<void> {
+    for (let i = 0; i < code.length; i++) await this.digits().nth(i).fill(code[i]!)
+  }
+}
+
 export class PlayerBuilderScreen extends Screen {
   readonly route = R.playerBuilder
   readonly readyTestId = 'player-builder-position-select'

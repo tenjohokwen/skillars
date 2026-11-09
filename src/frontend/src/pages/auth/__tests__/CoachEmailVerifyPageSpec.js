@@ -66,4 +66,14 @@ describe('CoachEmailVerifyPage.vue — nextStep branching (skillars-deferred-138
     expect(router.currentRoute.value.path).toBe('/login')
     expect(router.currentRoute.value.query.verified).toBe('true')
   })
+
+  it('a link already used (security.emailTokenUsed) goes to /login?verified=true, not an error (Pitchside REG-13)', async () => {
+    coachRegistrationApi.verifyEmail.mockRejectedValue({
+      response: { status: 400, data: { errorMsg: { errorKey: 'security.emailTokenUsed' } } },
+    })
+    const { router } = await mountPage()
+    await flushPromises()
+    expect(router.currentRoute.value.path).toBe('/login')
+    expect(router.currentRoute.value.query.verified).toBe('true')
+  })
 })
