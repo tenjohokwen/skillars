@@ -250,19 +250,31 @@ test.describe('D · Marketplace — the coach profile', () => {
       const coach = await provision.coach({ city, displayName: `${city} Checked` })
       const market = await new MarketplaceScreen(page, suite).open()
       const profile = new CoachPublicProfileScreen(page, suite)
-      /** Neither badge may wear the warning or danger colour (S-09: no record is not a red flag). */
+      /**
+       * Neither badge may wear the warning or danger colour (S-09: no record is not a red flag). Quasar paints a
+       * badge's `color` as its background, so text, background and border are all compared with both palettes.
+       */
       const neutral = async (badge: ReturnType<typeof profile.safeguardingBadge>) => {
-        const colour = await badge.evaluate((el) => getComputedStyle(el).color)
-        const warning = await page.evaluate(() =>
-          ['--accent-warning', '--accent-danger'].map((v) =>
-            getComputedStyle(document.documentElement).getPropertyValue(v).trim(),
-          ),
-        )
-        const rgb = (hex: string) =>
-          hex.startsWith('#')
-            ? `rgb(${parseInt(hex.slice(1, 3), 16)}, ${parseInt(hex.slice(3, 5), 16)}, ${parseInt(hex.slice(5, 7), 16)})`
-            : hex
-        expect(warning.map(rgb)).not.toContain(colour)
+        const worn = await badge.evaluate((el) => {
+          const style = getComputedStyle(el)
+          return [style.color, style.backgroundColor, style.borderColor]
+        })
+        const forbidden = await page.evaluate(() => {
+          const probe = document.createElement('span')
+          document.body.appendChild(probe)
+          const colours = [
+            '--q-warning',
+            '--q-negative',
+            '--accent-warning',
+            '--accent-danger',
+          ].map((v) => {
+            probe.style.color = `var(${v})`
+            return getComputedStyle(probe).color
+          })
+          probe.remove()
+          return colours
+        })
+        for (const colour of worn) expect(forbidden, `badge colour ${colour}`).not.toContain(colour)
       }
       const cardBadge = () =>
         market.card(`${city} Checked`).locator('[data-testid^="safeguarding-badge-"]')
@@ -280,8 +292,8 @@ test.describe('D · Marketplace — the coach profile', () => {
       const own = await new CoachSafeguardingScreen(self.page, suite).open()
       await own.request().click()
       await expect(own.pending()).toBeVisible()
-      const validUntil = await provision.inspectSafeguarding(coach)
       try {
+        const validUntil = await provision.inspectSafeguarding(coach)
         const [year, month] = validUntil.split('-')
         await page.reload()
         await profile.waitReady()
