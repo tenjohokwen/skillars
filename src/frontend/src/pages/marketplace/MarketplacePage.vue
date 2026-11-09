@@ -251,6 +251,11 @@ function goToProfile(coachId) {
     gap: 12px;
     align-items: center;
     margin-bottom: 24px;
+
+    // Pitchside MKT-04: an empty select in a flex row shrank to its arrow, hiding its label (age group, language).
+    .q-field {
+      min-width: 170px;
+    }
   }
 
   &__results-header {

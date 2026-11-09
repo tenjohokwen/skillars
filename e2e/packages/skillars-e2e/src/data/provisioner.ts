@@ -55,6 +55,11 @@ export interface PlayerAccount extends Account {
 export interface CoachOnboarding {
   displayName?: string
   city?: string
+  /** Step 1's district (default 'Centre') and coaching languages (default English). */
+  district?: string
+  languages?: string[]
+  /** Step 2's age groups (default 10–12, 13–17 and adult). */
+  ageGroups?: ('U10' | 'AGE_10_12' | 'AGE_13_17' | 'ADULT')[]
   timezone?: string
   perSessionPrice?: number
   pack?: { sessionCount: number; totalPrice: number; label: string } | null
@@ -290,14 +295,14 @@ export class Provisioner {
         displayName: options.displayName ?? `${account.firstName} Coaching`,
         bio: 'Technical coaching for young players.',
         city: options.city ?? 'Testville',
-        district: 'Centre',
-        languages: ['English'],
+        district: options.district ?? 'Centre',
+        languages: options.languages ?? ['English'],
         canonicalTimezone: timezone,
       })
       if (options.stopAfterStep === 1) return account
       await put(2, {
         specialties: ['Dribbling', 'Finishing'],
-        ageGroups: ['AGE_10_12', 'AGE_13_17', 'ADULT'],
+        ageGroups: options.ageGroups ?? ['AGE_10_12', 'AGE_13_17', 'ADULT'],
       })
       if (options.stopAfterStep === 2) return account
       // The step-3 pack becomes the coach's purchasable tier (skillars-deferred-168), so no tier POST follows.

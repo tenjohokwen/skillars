@@ -213,6 +213,7 @@ export class CoachPublicProfileScreen extends Screen {
   /** A parent's remaining credits with this coach (only once they hold or held a pack). */
   credits = () => this.tid('coach-profile-credits')
   reviews = () => this.tid('coach-profile-review')
+  reviewsEmpty = () => this.tid('coach-profile-reviews-empty')
   reviewBodies = () => this.tid('coach-profile-review-body')
   reviewResponses = () => this.tid('coach-profile-review-response')
   sortSelect = () => this.tid('review-sort-select')
