@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org">
+<head>
+    <meta charset="UTF-8">
+    <title th:text="#{email.changed_notice.title}">Your Skillars sign-in email was changed</title>
+</head>
+<body>
+    <!-- skillars-deferred-172: three variants. To the OLD address: the change was just confirmed (carries the undo
+         link), or 'undone' = it was reverted on a suspended account (no password reset possible). To the NEW
+         address, 'revertedAway' = the change was undone from the old address, which may not be the owner. -->
+    <p th:text="#{email.greeting(${recipient.firstname})}">Hello User,</p>
+
+    <th:block th:if="${map['undone'] != true and map['revertedAway'] != true}">
+        <p th:text="#{email.changed_notice.text1(${map.newEmailMasked})}">The email address you use to sign in to Skillars was changed to a…@example.com. You have been signed out on every device.</p>
+
+        <p th:text="#{email.changed_notice.notYou(${map.undoDays})}">If you didn't make this change, undo it within 7 days with the link below.</p>
+        <p>
+            <a th:href="${map.undoUrl}" th:text="#{email.changed_notice.undoLink}">Undo this change</a>
+        </p>
+
+        <p th:text="#{email.changed_notice.ignore}">If you made this change, you don't need to do anything.</p>
+    </th:block>
+
+    <th:block th:if="${map['undone'] == true}">
+        <p th:text="#{email.changed_notice.restored}">Your sign-in email has been restored to this address, and every session was signed out.</p>
+
+        <p th:text="#{email.changed_notice.restoredSuspended}">Your account is currently suspended. Once it is reinstated, reset your password from the sign-in page.</p>
+    </th:block>
+
+    <th:block th:if="${map['revertedAway'] == true}">
+        <p th:text="#{email.changed_notice.revertedAway(${map.oldEmailMasked})}">The email change on your Skillars account was undone from the previous address, a…@example.com. This address is no longer on the account, and every session was signed out.</p>
+
+        <p th:text="#{email.changed_notice.revertedAwayNotYou}">If you didn't undo it, someone else may have access to that mailbox. Contact support and quote the help code below.</p>
+    </th:block>
+
+    <hr/>
+    <p><small><span th:text="#{email.common.helpCode}">Help Code:</span> <span th:text="${map.helpCode}">CODE</span></small></p>
+</body>
+</html>

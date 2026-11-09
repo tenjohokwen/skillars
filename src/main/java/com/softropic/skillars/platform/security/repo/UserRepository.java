@@ -60,7 +60,18 @@ public interface UserRepository extends JpaRepository<User, Long> {
     List<User> findByActivatedFalseAndCreatedDateBeforeAndCleanupFailedAtIsNullOrderByIdAsc(
         Instant cutoffDate, Pageable pageable);
 
-    Optional<User> findOneByResetKey(final String resetKey);
+    /**
+     * The account a reset key belongs to, row-locked ({@code FOR UPDATE}, waiting) for the caller's transaction.
+     * Only password-reset completion uses it, and the lock is what makes the key check hold at write time: when
+     * another transaction is replacing the key (an email-change undo issues a new one and an unusable password,
+     * skillars-deferred-172), this waits, and Postgres re-evaluates {@code resetKey = :resetKey} against the
+     * committed row, so the superseded key finds nothing. An unlocked read would see the old key and then
+     * overwrite the undo's password. JPQL like {@link #findByIdForUpdate}, so the EAGER {@code addresses} are
+     * not joined into the locking statement. Must run inside the caller's transaction.
+     */
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("SELECT u FROM User u WHERE u.resetKey = :resetKey")
+    Optional<User> findOneByResetKey(@Param("resetKey") final String resetKey);
 
     Optional<User> findOneByEmail(final String email);
 
@@ -103,6 +114,15 @@ public interface UserRepository extends JpaRepository<User, Long> {
     @Query(value = "select cp.user_id from marketplace.coach_profiles cp where cp.id = :coachProfileId",
            nativeQuery = true)
     Optional<Long> findUserIdByCoachProfileId(@Param("coachProfileId") java.util.UUID coachProfileId);
+
+    /**
+     * skillars-deferred-176 review round 6: the account's email under {@code FOR SHARE}, so a transaction that has written
+     * the row (a GDPR erasure's tombstone, an email change) but not committed is waited for and its value read. Scalar and
+     * native so an already-managed {@link User} cannot hand back its pre-wait email. Must run inside the caller's
+     * transaction; the share lock is held until it ends.
+     */
+    @Query(value = "select u.email from main.\"user\" u where u.id = :id for share", nativeQuery = true)
+    Optional<String> findEmailByIdForShare(@Param("id") Long id);
 
     @Override
     void delete(final User user);

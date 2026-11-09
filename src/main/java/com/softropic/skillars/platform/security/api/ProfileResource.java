@@ -81,8 +81,9 @@ public class ProfileResource {
     }
 
     /**
-     * PUT /api/account/email to update the current user's email.
-     * Sends verification email to the new address.
+     * PUT /api/account/email to start changing the current user's email (skillars-deferred-172).
+     * Nothing changes yet: a confirmation link goes to the new address if it can be used, and the answer is the
+     * same either way. Confirm and undo are public ({@code EmailChangeResource}).
      * @param changeEmailDto contains old email, new email, and password for verification
      * @return success or failure response
      */
@@ -94,7 +95,8 @@ public class ProfileResource {
             changeEmailDto.getNewEmail(),
             changeEmailDto.getPassword());
         if (StringUtils.isNotBlank(code)) {
-            return new Success(code, "email.updated", "Your email address has been updated", Map.of());
+            return new Success(code, "email.change.requested",
+                "If this address can be used, we sent a confirmation link to it", Map.of());
         }
         return new Failure(UUID.randomUUID().toString(), "email.change.failure", "Your email cannot be changed");
     }

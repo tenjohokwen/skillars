@@ -10,7 +10,6 @@ import org.springframework.core.Ordered;
 import org.springframework.core.annotation.Order;
 import org.springframework.stereotype.Component;
 
-import static com.softropic.skillars.infrastructure.security.SecurityError.TOO_MANY_REQUESTS;
 
 /**
  * Aspect for enforcing rate limits on methods annotated with {@link RateLimited}.
@@ -67,9 +66,8 @@ public class RateLimitingAspect {
 
         if (!allowed) {
             LOGGER.warn("Rate limit exceeded for client: {}, key: {}", identifier, rateLimited.key());
-            // Using a generic exception or creating a specific one.
-            // Based on SecurityError, we might want to throw something that results in 429.
-            throw new AuthorizationException("Too many requests. Please try again later.", TOO_MANY_REQUESTS);
+            // Its own type so ApiAdvice answers 429 rather than the generic AuthorizationException 401 (skillars-deferred-180).
+            throw new RequestRateLimitedException("Too many requests. Please try again later.");
         }
     }
 

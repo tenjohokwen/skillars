@@ -119,8 +119,8 @@
       <tr><td><code>contract.exception</code></td><td>All security/registration/auth exception types, most carrying a message key and machine error code consumed by <code>ApiAdvice</code> (incl. <code>LoginRateLimitedException</code> &rarr; 429 + <code>Retry-After</code>, <code>FeatureGatedException</code>).</td></tr>
       <tr><td><code>contract.util</code></td><td><code>AuthoritiesConstants</code>, <code>Cryptopher</code> (crypto helper), <code>ShortCode</code> (short human-support codes / obfuscated ids).</td></tr>
       <tr><td><code>infrastructure</code></td><td>Security-module-internal plumbing: JWT filters/token creation and the JWT signing key holder (<code>infrastructure.jwt</code>, key from <code>JWT_SIGNING_KEY</code>, no DB lookup), the <code>/refresh</code> keep-alive and security-advice filters (<code>infrastructure.filter</code>), the authorization manager chain, and event listeners that turn auth/registration/suspension/erasure events into lockouts, audit rows and outbox emails (<code>infrastructure.listener</code>).</td></tr>
-      <tr><td><code>repo</code></td><td>JPA entities and Spring Data repositories: <code>User</code>, <code>PlayerProfile</code>, <code>ParentPlayerLink</code>, <code>Authority</code>, tokens (<code>RefreshToken</code>, <code>EmailVerificationToken</code>, <code>PhoneOtpToken</code>, <code>PersistentToken</code>), <code>LoginAttempt</code>, <code>SecKey</code>/<code>Secret</code> (encrypted key material), <code>UserAdminSummaryView</code> (admin search projection), <code>Address</code>/<code>Challenge</code> (embeddables).</td></tr>
-      <tr><td><code>service</code></td><td>All business logic: auth (<code>AuthService</code>, <code>LoginRateLimiter</code>, <code>LoginTokenManager</code>, <code>DaoAuthProvider</code>), registration (<code>CoachRegistrationService</code>, <code>ParentRegistrationService</code>, <code>PlayerRegistrationService</code>, <code>RegistrationOtpResendSupport</code>, <code>RegistrationVerificationTokenService</code>, <code>OtpHasher</code>, legacy <code>UserRegistrationService</code>), profile (<code>UserProfileService</code>, <code>UserService</code>), shadow accounts (<code>ShadowAccountService</code>, <code>PlayerOwnershipGuard</code>), GDPR write guard (<code>DevelopmentDataErasureGuard</code>), age policy, password reset, admin ops and housekeeping (<code>UserAdminService</code>, <code>AuthCleanupService</code>), startup bootstrap (<code>AdminBootstrapRunner</code>, <code>JwtSecretBootstrapRunner</code>), and low-level crypto (<code>SecKeyService</code>/<code>SecretService</code>).</td></tr>
+      <tr><td><code>repo</code></td><td>JPA entities and Spring Data repositories: <code>User</code>, <code>PlayerProfile</code>, <code>ParentPlayerLink</code>, <code>Authority</code>, tokens (<code>RefreshToken</code>, <code>EmailVerificationToken</code>, <code>PhoneOtpToken</code>, <code>PersistentToken</code>), <code>LoginAttempt</code>, <code>EmailChangeRequest</code>, <code>SecKey</code>/<code>Secret</code> (encrypted key material), <code>UserAdminSummaryView</code> (admin search projection), <code>Address</code>/<code>Challenge</code> (embeddables).</td></tr>
+      <tr><td><code>service</code></td><td>All business logic: auth (<code>AuthService</code>, <code>LoginRateLimiter</code>, <code>LoginTokenManager</code>, <code>DaoAuthProvider</code>), registration (<code>CoachRegistrationService</code>, <code>ParentRegistrationService</code>, <code>PlayerRegistrationService</code>, <code>RegistrationOtpResendSupport</code>, <code>RegistrationVerificationTokenService</code>, <code>OtpHasher</code>, legacy <code>UserRegistrationService</code>), profile (<code>UserProfileService</code>, <code>UserService</code>), email change (<code>EmailChangeService</code>, <code>EmailAddressAvailability</code>, <code>EmailChangeTokens</code>), shadow accounts (<code>ShadowAccountService</code>, <code>PlayerOwnershipGuard</code>), GDPR write guard (<code>DevelopmentDataErasureGuard</code>), age policy, password reset, admin ops and housekeeping (<code>UserAdminService</code>, <code>AuthCleanupService</code>), startup bootstrap (<code>AdminBootstrapRunner</code>, <code>JwtSecretBootstrapRunner</code>), and low-level crypto (<code>SecKeyService</code>/<code>SecretService</code>).</td></tr>
     </table>
 
     <h3 id="key-entities-tables">Key entities &amp; tables</h3>
@@ -130,12 +130,13 @@
       <tr><td><code>Authority</code></td><td><code>authority</code></td><td>Spring Security role/authority (<code>ROLE_USER</code>, <code>ROLE_ADMIN</code>, <code>ROLE_COACH</code>, <code>ROLE_PARENT</code>, <code>ROLE_PLAYER</code>, <code>ROLE_LTD_ADMIN</code> &mdash; the limited admin tier); many-to-many with <code>User</code>.</td></tr>
       <tr><td><code>PlayerProfile</code></td><td><code>main.player_profiles</code></td><td>Exactly one of <code>parent_id</code> (minor, created by parent) or <code>user_id</code> (self-registered adult) is set — enforced by <code>chk_pp_owner</code>. Carries <code>ageTier</code>, <code>position</code>, <code>independentAccountAllowed</code>, GDPR consent fields, and <code>development_data_erased_at</code> (V151) — the one-way GDPR erasure tombstone. An erased child keeps its row (bookings still reference it) but is filtered out of <code>ShadowAccountService.listPlayerProfiles</code>.</td></tr>
       <tr><td><code>ParentPlayerLink</code></td><td><code>main.parent_player_links</code></td><td>Join row linking a parent <code>User</code> to a <code>PlayerProfile</code>, with its own consent timestamp/version. <code>uq_ppl_player_id</code> prevents a player being linked to two parents (surfaced as <code>ShadowAccountException</code>).</td></tr>
-      <tr><td><code>RefreshToken</code></td><td><code>main.refresh_tokens</code></td><td>SHA-256-hashed rotating refresh token (7-day TTL) backing <code>/api/auth/refresh</code>. <code>used</code> is set by rotation <em>and</em> revocation, so two more columns carry the distinction (V224): <code>replacedById</code> names the successor a rotation created, and <code>revokedAt</code> marks a session that was deliberately ended. <code>sessionId</code> (uuid, V225) identifies the whole rotation chain &mdash; minted at login, copied onto each successor, and carried in the JWT as the <code>rtsid</code> claim so the authorisation filter can refuse an access token whose chain has no live row left. Rotated = <code>used</code> with no <code>revokedAt</code>, and the grace window may redirect along the link; revoked = refused outright. <code>markUsedByTokenHash</code>/<code>markAllUsedByUserId</code> are <code>REQUIRES_NEW</code> so a revocation survives the caller's rollback.</td></tr>
+      <tr><td><code>RefreshToken</code></td><td><code>main.refresh_tokens</code></td><td>SHA-256-hashed rotating refresh token (7-day TTL) backing <code>/api/auth/refresh</code>. <code>used</code> is set by rotation <em>and</em> revocation, so two more columns carry the distinction (V224): <code>replacedById</code> names the successor a rotation created, and <code>revokedAt</code> marks a session that was deliberately ended. <code>sessionId</code> (uuid, V225) identifies the whole rotation chain &mdash; minted at login, copied onto each successor, and carried in the JWT as the <code>rtsid</code> claim so the authorisation filter can refuse an access token whose chain has no live row left. Rotated = <code>used</code> with no <code>revokedAt</code>, and the grace window may redirect along the link; revoked = refused outright. <code>markUsedByTokenHash</code>/<code>markAllUsedByUserId</code> are <code>REQUIRES_NEW</code> so a revocation survives the caller's rollback. Since skillars-deferred-179 <code>markAllUsedByUserId</code> (every account-wide revocation) stamps <code>revokedAt</code> too, so a replay of a token it killed is the plain revoked 401, not a second reuse revocation.</td></tr>
       <tr><td><code>EmailVerificationToken</code></td><td><code>email_verification_tokens</code></td><td>Single-use UUID token shared by the three role registration flows (coach/parent/player).</td></tr>
       <tr><td><code>PhoneOtpToken</code></td><td><code>phone_otp_tokens</code></td><td>Keyed-HMAC 6-digit OTP (10-min TTL) for the phone-verification step, shared across the three registration flows. Partial unique index <code>uq_pot_one_active_per_user</code> allows one live OTP per user (a concurrent re-issue &rarr; 409 <code>security.otpResendInProgress</code>).</td></tr>
       <tr><td><code>LoginAttempt</code></td><td><code>main.login_attempts</code></td><td>One row per failed <code>/api/auth/login</code>, keyed by <code>identifier = SHA-256(email|ip)</code> plus (V171) <code>subject_hash = SHA-256(email)</code>, so an admin can count/clear an account's failures across all IPs. Purged after 24h by <code>AuthCleanupService</code>.</td></tr>
       <tr><td><code>UserIdentitySignal</code></td><td><code>main.user_identity_signals</code></td><td>Hashed identifiers observed per user (V220): <code>kind</code> EMAIL / PHONE / CARD / BROWSER and a SHA-256 <code>value_hash</code> of the normalised value, unique per (user, kind, hash), with <code>first_seen</code> / <code>last_seen</code>. Written by <code>UserIdentitySignalService</code> (login records the browser fingerprint cookie and the account's email and phone; the payment module adds card fingerprints), compared by <code>RelatedPartyService</code> to link a coach to a second account (see <a href="../payment/index.html">Payment</a>). Best-effort writes, never fail a login. Raw values are never stored, and <code>GdprErasureService</code> deletes every row of an erased user.</td></tr>
       <tr><td><code>AgeVerification</code></td><td><code>main.age_verifications</code> (V222)</td><td>One row per Stripe Identity session a self-registered player started: <code>status</code> (<code>CREATED</code>, <code>PROCESSING</code>, <code>REQUIRES_INPUT</code>, <code>VERIFIED</code>, <code>UNDERAGE</code>, <code>CANCELED</code>), <code>stripe_session_id</code> (unique), <code>verified_tier</code>, <code>verified_at</code>. No document data and no date of birth. "Is verified" means a <code>VERIFIED</code> row exists; the per-day attempt cap counts rows by <code>created_at</code>. Deleted by GDPR erasure.</td></tr>
+      <tr><td><code>EmailChangeRequest</code></td><td><code>main.email_change_requests</code> (V232)</td><td>One row per requested email change: <code>old_email</code>, <code>old_login</code>, <code>new_email</code> (lowercase, CHECK), SHA-256 <code>confirm_token_hash</code> / <code>undo_token_hash</code> (both unique), <code>confirm_expires_at</code> (24 h), <code>confirmed_at</code>, <code>undo_expires_at</code> (7 days after confirm), <code>undone_at</code>, <code>superseded_at</code>, <code>@Version</code>. Partial unique <code>ux_ecr_one_open_per_user</code> allows one open (unconfirmed, not superseded) request per user. A confirmed, not undone row with <code>undo_expires_at</code> in the future is an open undo window and reserves <code>old_email</code>. No FK cascade: GDPR erasure deletes the rows itself.</td></tr>
       <tr><td><code>PersistentToken</code></td><td><code>persistent_token</code></td><td>Per-user session/device info (IP, user agent, blacklist flag); cleared by <code>UserErasedEventListener</code>.</td></tr>
       <tr><td><code>SecKey</code> / <code>Secret</code></td><td><code>sec_key</code> / <code>sec</code></td><td>Jasypt-encrypted key material keyed by (<code>version</code>, <code>busId</code>). The JWT signing key no longer lives here: it comes from the <code>JWT_SIGNING_KEY</code> env var (Base64, at least 64 bytes), and the <code>sec</code> row <code>(v1, jot)</code> is unused legacy data.</td></tr>
     </table>
@@ -144,18 +145,20 @@
     <table>
       <tr><th>Service</th><th>Orchestrates</th></tr>
       <tr><td><code>AuthService</code></td><td>SPA login (DB-backed rate limit on <code>SHA-256(email|ip)</code>, config <code>security.login.max-attempts</code> = 5 / <code>security.login.lock-window-minutes</code> = 15), refresh-token rotation with reuse/theft detection and a 30s multi-tab grace window that follows the presented token&#39;s own <code>replaced_by_id</code> successor (never the account&#39;s newest live token), a session-epoch check, logout, and the <code>potc</code>/<code>rtkn</code>/<code>skp</code> cookies. A stale token whose chain is still live is answered <code>401</code> with nothing written (it is a benign double-refresh, not theft); only a chain with nothing live at its end escalates to revoke-all. Every login and rotation stamps the chain&#39;s <code>sessionId</code> into the JWT. <code>ensureAccountIsLive</code> (activated, then not locked) gates both login and refresh. Also <code>clearLoginRateLimit</code>/<code>countRecentFailedAttempts</code> (by <code>subject_hash</code>) for admin unlock.</td></tr>
-      <tr><td><code>AccountManagementFacade</code></td><td>Legacy account registration (<code>/v1/account/register</code>), activation and password-reset orchestration used by <code>AccountResource</code>/<code>ProfileResource</code>; delegates to email/SMS strategies and is <code>@RateLimited</code> per IP (register 5/60min, resend 3/30, reset-init 3/15, reset-finish 5/10, change-email 5/60).</td></tr>
+      <tr><td><code>AccountManagementFacade</code></td><td>Legacy account registration (<code>/v1/account/register</code>), activation and password-reset orchestration used by <code>AccountResource</code>/<code>ProfileResource</code>; delegates to email/SMS strategies and is <code>@RateLimited</code> per IP (register 5/60min, resend 3/30, reset-init 3/15, reset-finish 5/10, change-email 5/60). <code>changeEmail</code> now only delegates to <code>EmailChangeService.request</code> and returns a support code.</td></tr>
       <tr><td><code>CoachRegistrationService</code>, <code>ParentRegistrationService</code>, <code>PlayerRegistrationService</code></td><td>Near-identical register &rarr; email-verify &rarr; phone-OTP-verify &rarr; <code>BASIC_VERIFIED</code> pipelines per role, differing mainly in DOB handling and the events they publish. Each method is <code>@RateLimited</code> per IP (<code>{role}_register</code> 3/60min, <code>{role}_verify_email</code> 10/10, <code>{role}_resend_verification</code> 3/30, <code>{role}_resend_otp</code> 3/30). <code>ParentRegistrationService</code> maps a <code>user_phone_key</code> violation (by constraint name, after <code>saveAndFlush</code>) to a phone-in-use error.</td></tr>
       <tr><td><code>RegistrationOtpResendSupport</code></td><td>The shared body of the three <code>resendPhoneOtp</code> methods: per-user rate cap, OTP re-issue, role-specific OTP email event.</td></tr>
       <tr><td><code>RegistrationVerificationTokenService</code></td><td>Issues/verifies the opaque phone-verification handle (<code>base64url(payload).base64url(HmacSHA256)</code> over <code>role, userId, expiry</code>, 24h) returned by <code>/verify-email</code> and required by <code>/verify-phone</code> and <code>/resend-otp</code>, so those <code>permitAll</code> endpoints never take a raw <code>userId</code>. Keyed by <code>skillars.platform.registration-verification-secret</code>; aborts startup if unset.</td></tr>
       <tr><td><code>OtpHasher</code></td><td>Sole owner of <code>phone_otp_tokens.otp_hash</code>: <code>HmacSHA256(otpKey, userId:otp)</code>, with <code>otpKey</code> derived from <code>registration-verification-secret</code> under a fixed purpose label (never equal to the handle-signing key).</td></tr>
       <tr><td><code>ShadowAccountService</code></td><td>Creates/lists/fetches <code>PlayerProfile</code>s for parent-managed minors (with consent enforcement) and self-registered adults; updates position (<code>updateOwnPosition</code>/<code>updateChildPosition</code>); hides GDPR-erased children from listings. There is no "link another parent" path: one parent per player is enforced by <code>uq_ppl_player_id</code>.</td></tr>
-      <tr><td><code>UserService</code> / <code>UserProfileService</code></td><td>User/profile lookups and self-service profile mutations (email, password, phone, address, info), each publishing an <code>AccountChangeEvent</code> for audit/notification.</td></tr>
+      <tr><td><code>UserService</code> / <code>UserProfileService</code></td><td>User/profile lookups and self-service profile mutations (password, phone, address, info), each publishing an <code>AccountChangeEvent</code> for audit/notification. A password change also ends a pending email change. The email is no longer changed here (<code>updateUserEmail</code> is gone).</td></tr>
+      <tr><td><code>EmailChangeService</code></td><td>The account email change (skillars-deferred-172): <code>request</code>, <code>confirm</code>, <code>undo</code>, plus <code>assertNoOpenUndoWindow</code> (erasure hold, <code>MANDATORY</code>) and <code>endPendingRequest</code> (called by password change and reset, <code>MANDATORY</code>). Every mail goes through the outbox inside the deciding transaction. See <a href="#account-email-change">the flow</a>.</td></tr>
+      <tr><td><code>EmailAddressAvailability</code></td><td>The one answer to "can this address go on an account?": <code>holderOf(address, requesterId, now)</code> finds an account whose email or login is the lowercased address, else a reservation (the old address of a confirmed change still inside its undo window). Returns the holder, whether it is a reservation, and where a notice must go. Used by every registration path, the legacy facade and the email change.</td></tr>
       <tr><td><code>AgeVerificationService</code></td><td>S-27 Stripe Identity age verification (see the flow below): the booking gate <code>requireVerifiedToBook</code>, the chat gate's <code>isVerified</code>/<code>isEnabled</code>, <code>start</code> (create or resume a session, daily cap, idempotency key), <code>applyOutcome</code> (webhook state machine, DOB correction, underage lock), <code>eraseForUser</code>. It talks to the provider only through the <code>AgeVerificationGateway</code> port (implemented by payment's <code>StripeIdentityGateway</code>), so security never imports Stripe types.</td></tr>
       <tr><td><code>AgePolicyService</code></td><td>Config-driven age-tier calculation and derived <code>MessagingPolicy</code> (<code>getMessagingPolicy</code>, <code>findMessagingPolicy</code>, batch <code>findMessagingPoliciesByPlayerIds</code>), shared by shadow-account creation, player self-registration and messaging.</td></tr>
       <tr><td><code>LoginRateLimiter</code></td><td>The one failed-login limiter, in <code>main.login_attempts</code> keyed by SHA-256(login|ip): <code>checkLimited</code>, <code>recordFailure</code>, admin <code>clear</code>/<code>countRecentFailures</code>. Budget/window from <code>security.login.max-attempts</code> / <code>lock-window-minutes</code>. Used by <code>AuthService.login</code>, the only password entry point. <code>checkLimited</code> (<code>MANDATORY</code> propagation) first claims <code>pg_try_advisory_xact_lock(hashtext('login_attempt:' || key))</code>, held until the login transaction ends: a parallel burst never records more than the budget, and an attempt that finds another one for the same key in flight re-tries the try-lock for up to 2 s (<code>CLAIM_WAIT</code>), then gets 429 — a bounded wait instead of parking a pooled connection behind a blocking lock. No account-wide (all IPs) cap, to avoid account-DoS.</td></tr>
       <tr><td><code>LoginTokenManager</code> / <code>JwtManagerImpl</code></td><td>Mint, extend and delete the JWT cookie set (<code>potc</code>, <code>user</code>, <code>rint</code>, <code>ION</code>, <code>skp</code>…). The JWT carries <code>ROLES</code> and <code>sessIat</code> (<code>SESSION_ISSUED_AT</code>); role precedence for a multi-role claim set is explicit ADMIN &gt; COACH &gt; PARENT &gt; PLAYER, and a null/non-string <code>ROLES</code> claim is rejected cleanly.</td></tr>
-      <tr><td><code>PasswordResetService</code></td><td>Reset-key issuance/validation and password completion, delegating invariant checks to <code>User</code> domain methods.</td></tr>
+      <tr><td><code>PasswordResetService</code></td><td>Reset-key issuance/validation and password completion, delegating invariant checks to <code>User</code> domain methods. Matches the typed current email in any casing. Completing a reset ends a pending email change.</td></tr>
       <tr><td><code>UserAdminService</code></td><td><code>lockUserAccount</code>, <code>deleteUserInformation</code>, and the nightly <code>removeNotActivatedUsers</code> purge (batched, capped at 10,000 delete attempts per run, failures recorded in <code>user.cleanup*</code> columns).</td></tr>
       <tr><td><code>AuthCleanupService</code></td><td>Housekeeping: hourly purge of expired refresh tokens and half-hourly purge of <code>login_attempts</code> older than 24h.</td></tr>
       <tr><td><code>AdminBootstrapRunner</code></td><td>Opt-in startup runner. Creates the first <code>ROLE_ADMIN</code> from <code>app.bootstrap.admin.*</code> (never elevates an existing user; fails boot on misconfiguration, swallows data errors).</td></tr>
@@ -170,8 +173,8 @@
       <tr><td>GET</td><td><code>/api/security/age-verification</code></td><td>S-27: the caller's age-verification state (<code>applicable</code>, <code>enabled</code>, <code>state</code> = NOT_STARTED / PENDING / FAILED / VERIFIED / BLOCKED, <code>attemptsRemainingToday</code>)</td><td>ROLE_PLAYER</td></tr>
       <tr><td>POST</td><td><code>/api/security/age-verification/session</code></td><td>S-27: start or resume a Stripe Identity session; returns <code>{state, url}</code> (the hosted Stripe page). <code>@RateLimited</code> 5 per 10 min per IP, daily cap per user. 403 gate / 429 <code>security.ageVerificationAttemptsExceeded</code> / 503 <code>security.ageVerificationUnavailable</code></td><td>ROLE_PLAYER</td></tr>
       <tr><td>POST</td><td><code>/api/auth/login</code></td><td>SPA password login; issues JWT + refresh-token + <code>skp</code> cookies</td><td>Public</td></tr>
-      <tr><td>POST</td><td><code>/api/auth/refresh</code></td><td>Rotate refresh token, reissue JWT</td><td>Public (refresh-token cookie)</td></tr>
-      <tr><td>POST</td><td><code>/api/auth/logout</code></td><td>Revoke the refresh token, clear cookies</td><td>Public</td></tr>
+      <tr><td>POST</td><td><code>/api/auth/refresh</code></td><td>Rotate refresh token, reissue JWT. <code>@RateLimited</code> 5/min per IP</td><td>Public (refresh-token cookie)</td></tr>
+      <tr><td>POST</td><td><code>/api/auth/logout</code></td><td>Revoke the refresh token, clear cookies. Not rate-limited (a shared-IP bucket could block others' logouts)</td><td>Public</td></tr>
       <tr><td>GET (any verb)</td><td><code>/refresh</code></td><td>Keep-alive: <code>JWTAuthorizationFilter</code> extends the JWT, <code>SessionRefreshFilter</code> returns an empty 200</td><td>Any authenticated role</td></tr>
       <tr><td>POST</td><td><code>/api/logout</code></td><td>Spring Security logout (POST only, so a cross-site GET cannot trigger it): a <code>LogoutHandler</code> runs <code>SecurityUtil.terminateSession</code> (revokes the <code>rtkn</code> refresh token, clears cookies), then <code>AjaxLogoutSuccessHandler</code> answers 200</td><td>Public</td></tr>
       <tr><td>POST</td><td><code>/v1/account/register</code></td><td>Legacy full account registration (<code>RegisterPage.vue</code>)</td><td>Public</td></tr>
@@ -183,7 +186,9 @@
       <tr><td>POST</td><td><code>/v1/account/reset_password/finish</code></td><td>Complete password reset</td><td>Public</td></tr>
       <tr><td>GET</td><td><code>/v1/account/ping</code></td><td>Liveness probe</td><td>Authenticated (not in <code>PUBLIC_ENDPOINTS</code>)</td></tr>
       <tr><td>GET</td><td><code>/api/account/profile</code></td><td>Get current user's full profile incl. addresses</td><td><code>HAS_ANY_ROLE</code> (ADMIN/LTD_ADMIN/USER/COACH/PARENT/PLAYER)</td></tr>
-      <tr><td>PUT</td><td><code>/api/account/email</code></td><td>Change email (sends verification)</td><td>Same as above</td></tr>
+      <tr><td>PUT</td><td><code>/api/account/email</code></td><td>Start an email change: checks password and current email, mails a confirm link to the new address (or an in-use notice to the holder) and changes nothing yet. Same answer whether or not the address is free. 409 <code>email.change.recentChange</code> inside an undo window, 429 after 3 per account per hour. See <a href="#account-email-change">Account email change</a></td><td>Same as above</td></tr>
+      <tr><td>POST</td><td><code>/api/email-change/confirm</code></td><td>Apply a requested email change (<code>{token}</code> in the body); 400 <code>email.change.linkInvalid</code> for any unusable link. <code>@RateLimited</code> 10 per 10 min per IP</td><td>Public (the token is the credential)</td></tr>
+      <tr><td>POST</td><td><code>/api/email-change/undo</code></td><td>Revert a confirmed email change (<code>{token}</code>); answers <code>{code, passwordResetSent}</code>. 10 per 10 min per IP</td><td>Public (the token is the credential)</td></tr>
       <tr><td>PUT</td><td><code>/api/account/password</code></td><td>Change password</td><td>Same as above</td></tr>
       <tr><td>PUT</td><td><code>/api/account/phone</code></td><td>Change phone</td><td>Same as above</td></tr>
       <tr><td>PUT</td><td><code>/api/account/address</code></td><td>Add/replace an address</td><td>Same as above</td></tr>
@@ -221,7 +226,8 @@
     <p>Published (via <code>ApplicationEventPublisher</code>):</p>
     <ul>
       <li><code>UserRegisteredEvent</code>, <code>CoachVerificationEmailEvent</code>/<code>CoachOtpEmailEvent</code>, <code>ParentVerificationEmailEvent</code>/<code>ParentOtpEmailEvent</code>, <code>PlayerVerificationEmailEvent</code>/<code>PlayerOtpEmailEvent</code> — registration/verification emails and OTP codes per role. They are consumed by this module's own <code>{Role}RegistrationEmailListener</code>s (<code>BEFORE_COMMIT</code>), which enqueue onto the notification outbox via <code>NotificationOutboxSupport</code> — so an outbox insert failure rolls the registration back with a 500 rather than silently losing the email.</li>
-      <li><code>AccountChangeEvent</code> / <code>AccountChangeUserInfo</code> — published on every self-service profile mutation (email, password, phone, address) for audit trail and notification.</li>
+      <li><code>AccountChangeEvent</code> / <code>AccountChangeUserInfo</code> — published on every self-service profile mutation (password, phone, address) for audit trail and notification. <code>EMAIL_CHANGED</code> (at confirm) and <code>EMAIL_CHANGE_UNDONE</code> (at undo) are audit-only: <code>AccountChangeEmailListener</code> skips them, because <code>EmailChangeService</code> sends its own mails, and <code>AccountChangeEventListener</code> records them with <code>authenticated = false</code> (they come from mailed links, without a session).</li>
+      <li><code>ReservedAddressAttemptEvent</code> — a registration typed an address that is reserved by another account's email change. <code>RegistrationDuplicateAttemptListener</code> (<code>BEFORE_COMMIT</code>) enqueues <code>EMAIL_CHANGE_ADDRESS_IN_USE</code> with <code>reserved = true</code> to the reserved address.</li>
       <li><code>SecurityAlertEvent</code> (throttled per client+cause by <code>JWTAuthorizationFilter</code>), <code>SendMailEvent</code> — security side effects recorded by <code>SecurityAuditListener</code> / sent by <code>SendMailListener</code>.</li>
     </ul>
     <p>Defined here but published elsewhere and (partly) consumed here:</p>
@@ -480,9 +486,10 @@ sequenceDiagram
       suspension, GDPR erasure, refresh-token-theft revocation <em>and now a plain logout</em> all take effect on open
       sessions within at most 5 minutes &mdash; the chain check is what closes logout, which the account-wide epoch
       deliberately does not cover (bumping it would sign the user out of their other devices). Two consequences worth
-      knowing: a JWT minted before that story carries no <code>rtsid</code>; presented WITH its <code>rtkn</code>
-      cookie the claim is re-derived and the check applies, presented without it the check is deliberately
-      skipped (failing closed at deploy would end every live session), and the refresh chain's 7-day TTL now caps a session &mdash; but it binds the SPA, not
+      knowing: a JWT with no <code>rtsid</code> claim (minted before that story, or stripped by an older instance during
+      a rolling deploy) presented WITH its <code>rtkn</code> cookie has the claim re-derived and checked; presented
+      without it, it is refused (fail-closed since skillars-deferred-180; the browser binding in
+      <code>isTokenFixed</code> compares only client-sent values, so it does not stop a copied cookie jar), and the refresh chain's 7-day TTL now caps a session &mdash; but it binds the SPA, not
       API clients: every rotation writes a fresh <code>expires_at</code>, so a client that keeps refreshing
       is never capped, while the SPA (which has no caller for <code>POST /api/auth/refresh</code>) keeps the
       deadline written at login. Three attempts to remove that were withdrawn; see
@@ -500,6 +507,94 @@ sequenceDiagram
       <code>isBeforeSessionEpoch</code>; stamping after means any row that survived the revoke is older than the epoch.
       The same reorder was applied to <code>AgeVerificationService.blockAccount</code> and
       <code>AccountSuspensionEventListener.suspend</code>. <code>unlockLogin</code> calls <code>AuthService.clearLoginRateLimit</code> for both the login and the email.
+    </p>
+    <p>
+      The DB re-auth path also runs <code>assertSameAccount</code> (skillars-deferred-172): <code>authorize</code>
+      reloads the user by the token's login, and an email change moves the login, so an address can later belong
+      to another account (after an undo, or once its reservation ends and someone registers it). A JWT whose
+      <code>busId</code> differs from the reloaded account's business id is refused
+      (<code>ACCOUNT_NOT_LOGIN_ABLE</code>). The check does not depend on the <code>rtsid</code> chain claim. A token
+      with no <code>busId</code> is let through, as <code>userIdOf</code> does, since every token this server mints has one.
+    </p>
+
+    <h3 id="account-email-change">Account email change</h3>
+    <p>
+      For an email-login account the login <em>is</em> the email, so changing the email changes how the user signs in.
+      <code>EmailChangeService</code> makes that a three-step, reversible change. Nothing changes on the account until
+      the link mailed to the new address is used, and the old address can take the account back for 7 days.
+    </p>
+    <pre class="mermaid">
+sequenceDiagram
+  participant U as User (signed in)
+  participant API as ProfileResource / EmailChangeResource
+  participant S as EmailChangeService
+  participant DB as user / email_change_requests / refresh_tokens
+  participant OB as Notification outbox
+
+  U->>API: PUT /api/account/email {oldEmail, newEmail, password}
+  API->>S: request(old, new, password)
+  S->>DB: check password and current email (any casing)
+  S->>DB: per-account limit 3/h (429), user row FOR UPDATE NOWAIT via PessimisticLockRetryer (409 once retries run out), open undo window? (409 recentChange)
+  S->>DB: supersedeOpen (previous open request ends on every path)
+  alt address held by another account or reserved
+    S->>OB: EMAIL_CHANGE_ADDRESS_IN_USE to the holder (2/h per holder, silent)
+  else address free, under 3 confirm mails per account and address and 10 per address per 24h
+    S->>DB: insert request (confirm hash, expires in 24h)
+    S->>OB: EMAIL_CHANGE with confirm link to the new address
+  end
+  S-->>U: same success answer in every case
+
+  U->>API: POST /api/email-change/confirm {token}
+  API->>S: confirm(token)
+  S->>DB: request open? account not locked, email still old_email, address still free?
+  alt any check fails
+    S->>DB: end the request (unless it was already unusable)
+    S-->>U: 400 email.change.linkInvalid
+  end
+  S->>DB: claimConfirm (conditional UPDATE, undo hash, expires in 7 days)
+  S->>DB: markAllUsedByUserId (REQUIRES_NEW), set email and login, session epoch (MANDATORY)
+  S->>OB: EMAIL_CHANGED_NOTICE with undo link to the old address
+
+  U->>API: POST /api/email-change/undo {token}
+  API->>S: undo(token)
+  S->>DB: claimUndo, end other open requests and undo links, revoke refresh tokens
+  S->>DB: restore email and login, session epoch
+  alt activated and not locked
+    S->>DB: password replaced by an unusable random value, reset key issued
+    S->>OB: PASSWORD_RESET to the restored address
+  else locked or not activated
+    S->>DB: password replaced, pending reset key cleared
+    S->>OB: EMAIL_CHANGED_NOTICE (undone) to the restored address
+  end
+  S->>OB: EMAIL_CHANGED_NOTICE (revertedAway) to the address the account left
+    </pre>
+    <table>
+      <tr><th>Rule</th><th>How</th></tr>
+      <tr><td>No enumeration</td><td><code>request</code> answers the same whether the new address is free, taken by another account (as email or login), or reserved. Only a wrong password or current email (<code>EMAIL_OR_PW_MISMATCH</code>), the per-account limit (429) and an open undo window (409) are refused, and none of them depends on the target. The previous open request is superseded on every path, so its link dies whether or not a new one is sent. Asking for the account's own current address ends the open request and sends nothing.</td></tr>
+      <tr><td>Limits</td><td>Endpoint <code>@RateLimited change_email</code> 5 per hour per IP. Per account 3 requests per hour (429 <code>email.change.tooManyRequests</code>). Confirm mails: 3 per 24 h per (account, target address) and 10 per 24 h per target address, so one account cannot use up an address's allowance, though four or more together can (accepted). Per holder account 2 in-use notices per hour. All silent (same answer, nothing sent). The 24 h windows rely on <code>security.rate_limiting.bucket_ttl_hours</code> staying at 24 or more; buckets are per JVM. Confirm and undo: 10 per 10 min per IP each.</td></tr>
+      <tr><td>Tokens</td><td>32 random bytes, URL-safe Base64 (<code>EmailChangeTokens</code>). Only the SHA-256 hex hash is stored. Confirm link 24 h (<code>/#/email-change/confirm?token=</code>), undo link 7 days (<code>/#/email-change/undo?token=</code>). Both endpoints take the token in a POST body, so a link scanner that prefetches the page cannot use it.</td></tr>
+      <tr><td>Confirm refusals</td><td>Unknown, used, expired or superseded link: 400 <code>email.change.linkInvalid</code>. Account locked, account email no longer the request's <code>old_email</code>, or new address taken since the request: the same 400, and the request is ended (the method is <code>noRollbackFor</code> that exception so the end commits). A double click loses at <code>claimConfirm</code>, a conditional UPDATE.</td></tr>
+      <tr><td>Confirm effect</td><td>Sets the email, and the login too when <code>loginIdType</code> is <code>EMAIL</code>. Revokes every session: refresh tokens first (<code>REQUIRES_NEW</code>, on rows this transaction has not touched), then <code>invalidateSessionsForUserInCurrentTransaction</code>. Mails <code>EMAIL_CHANGED_NOTICE</code> (masked new address and undo link) to the old address.</td></tr>
+      <tr><td>Undo effect</td><td>Restores <code>old_email</code> and <code>old_login</code>, ends every other open request and every other undo link of the account, revokes every session, then on a normal account replaces the password with an unusable random value and mails <code>PASSWORD_RESET</code> to the restored address, so whoever made the change is locked out. On a locked (suspended) or not-activated account it keeps the lock, still replaces the password and clears any pending reset key (the party who made the change knows the password and may hold a key mailed to its address), sends no reset link, and mails the <code>undone</code> variant of <code>EMAIL_CHANGED_NOTICE</code> instead. Either way the address the account leaves gets the <code>revertedAway</code> variant (masked restored address, help code): whoever reads the old mailbox can undo, and that may not be the owner. The response's <code>passwordResetSent</code> tells the page which happened.</td></tr>
+      <tr><td>Erasure after an undo</td><td>The undo ends the erasure hold, but the JWT filter re-checks a token against the session epoch only every 5 minutes. So <code>GdprResource</code>'s two erasure endpoints call <code>CurrentSessionGuard.assertNotRevoked</code> first: a DB read that refuses (401) a locked account or a token issued before the account's last session revocation. Use it on any other irreversible endpoint.</td></tr>
+      <tr><td>One request at a time</td><td><code>request</code> locks the account's user row (<code>findByIdForUpdate</code>, NO_WAIT inside <code>PessimisticLockRetryer.withBoundedRetry</code>, about 3 s) before reading the undo window. A request still blocked after the retries answers 409 <code>generic.conflict</code> whatever its target. Without the lock, two simultaneous requests would show whether an address is registered: only a free target inserts a row, and only that insert collides in <code>ux_ecr_one_open_per_user</code>.</td></tr>
+      <tr><td>Reset racing an undo</td><td><code>UserRepository.findOneByResetKey</code> is <code>PESSIMISTIC_WRITE</code>. A password reset that started with a key the undo then cleared or replaced waits for the undo to commit, re-reads the row, no longer finds the key and is refused, so it cannot overwrite the undo's password.</td></tr>
+      <tr><td>One change per undo window</td><td>While a confirmed change can still be undone, a new request answers 409 <code>email.change.recentChange</code> with the window's end as an ISO-8601 instant in <code>errorMsg.message</code>.</td></tr>
+      <tr><td>Reservation</td><td>For the 7-day undo window the old address counts as taken (<code>EmailAddressAvailability</code>): every registration path and other accounts' email changes treat it like an existing account. The notice about such an attempt goes to the reserved address itself (<code>EMAIL_CHANGE_ADDRESS_IN_USE</code>, <code>reserved = true</code>), never to the account's current email, which may be the attacker's.</td></tr>
+      <tr><td>Erasure hold</td><td><code>GdprRequestService.requestErasure</code> and <code>requestChildErasure</code> (for the parent) call <code>assertNoOpenUndoWindow</code>: 409 <code>gdpr.recentEmailChange</code> during the window, because erasure deletes the request rows and would make a takeover permanent. <code>GdprErasureService</code> deletes the user's <code>email_change_requests</code> rows.</td></tr>
+      <tr><td>Password change and reset</td><td>Both call <code>endPendingRequest</code>: an unconfirmed request's link stops working. A confirmed change's undo link is not touched.</td></tr>
+      <tr><td>Audit</td><td><code>AccountChangeEvent</code> <code>EMAIL_CHANGED</code> / <code>EMAIL_CHANGE_UNDONE</code>, audit-only and recorded unauthenticated. <code>PROFILE_CHANGE</code> is no longer sent for an email change. Every queued mail logs <code>[EMAIL_CHANGE_MAIL]</code> with its help code.</td></tr>
+    </table>
+
+    <h3 id="case-insensitive-identity">Case-insensitive identity</h3>
+    <p>
+      <code>Customer.setEmail</code> and <code>User.setLogin</code> lowercase what they store (phone logins are digits,
+      so unaffected). V231 lowercased the existing rows and added unique indexes <code>ux_user_email_lower</code> and
+      <code>ux_user_login_lower</code> on <code>lower(email)</code> / <code>lower(login)</code>, so two accounts can no
+      longer differ only by letter case; <code>ApiAdvice</code> maps both to the same keys as
+      <code>user_email_key</code> / <code>user_login_key</code>. Lookups lowercase the typed value and match exactly.
+      Before this, an account registered as <code>Anna@X.com</code> by the role registration paths could never sign in,
+      because sign-in lowercases the typed id.
     </p>
 
     <h2 id="conventions-gotchas">Conventions &amp; Gotchas</h2>
@@ -553,6 +648,13 @@ sequenceDiagram
       timeline/homework/development rows for a player should call <code>DevelopmentDataErasureGuard</code> inside its
       write transaction (it is <code>MANDATORY</code> and locks <code>player_profiles</code> first — keep that lock
       order). An unlocked "is erased?" read leaves a window where a row lands after the erasure's delete.</p>
+    </div>
+    <div class="callout warn">
+      <p><strong>A new uniqueness check on an email must use <code>EmailAddressAvailability</code>: it also consults
+      the reservation.</strong> A plain <code>findOneByEmail</code>/<code>findOneByLogin</code> misses the old address of
+      a confirmed email change that can still be undone, so it would let someone register (or move another account
+      onto) the address its owner is about to take back. Use <code>holderOf</code>, and send any notice to
+      <code>Holder.notifyAddress()</code>, not to the holder's current email.</p>
     </div>
     <div class="callout">
       <p><strong><code>ApiAdvice</code> maps DB constraint names to error keys — keep the two tables in sync.</strong>
@@ -630,7 +732,7 @@ sequenceDiagram
       <li><a href="../index.html">Home</a></li>
     </ul>
 
-    <footer class="page-footer">Last verified against master <code>1ee47152</code> (2026-10-31).</footer>
+    <footer class="page-footer">Last verified against master <code>0eaf7e6b</code> (2026-11-05).</footer>
   </main>
 </div>
 <script src="../assets/mermaid.min.js"></script>

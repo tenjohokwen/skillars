@@ -42,10 +42,13 @@ class StripeCustomerErasureOutboxSupportTest {
 
         support().scheduleErasure(7L);
 
-        assertThat(customer.getStripePaymentMethodId()).isNull();
+        // skillars-deferred-176 round-1 V2: an UPDATE that always locks the row, never a save of the loaded entity
+        verify(stripeCustomerRepository).clearPaymentMethod(7L);
+        // skillars-deferred-177 (RS03i): marked in the same transaction, so the sweep skips it
+        verify(stripeCustomerRepository).markErasureScheduled(eq(7L), any());
+        verify(stripeCustomerRepository, never()).save(any());
         assertThat(customer.getStripeCustomerId()).isEqualTo("cus_123");
         assertThat(customer.getLastPaymentIntentId()).isEqualTo("pi_1");
-        verify(stripeCustomerRepository).save(customer);
         verify(outboxService).enqueue(eq(StripeCustomerErasureOutboxSupport.AGGREGATE_TYPE),
             eq("{\"stripeCustomerId\":\"cus_123\"}"));
         verify(outboxService).requestDrainAfterCommit();
@@ -68,5 +71,14 @@ class StripeCustomerErasureOutboxSupportTest {
         support().scheduleErasure(9L);
 
         org.mockito.Mockito.verify(packAttemptRepository).nullCardsForParent(9L);
+    }
+
+    // skillars-deferred-177 (review round 3)
+    @Test
+    void anOrphanCustomer_isEnqueuedByItsIdAlone() {
+        support().scheduleOrphanErasure("cus_orphan");
+
+        verify(outboxService).enqueue(StripeCustomerErasureOutboxSupport.AGGREGATE_TYPE, "{\"stripeCustomerId\":\"cus_orphan\"}");
+        verify(outboxService).requestDrainAfterCommit();
     }
 }

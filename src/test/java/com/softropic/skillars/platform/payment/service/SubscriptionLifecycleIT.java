@@ -101,7 +101,7 @@ class SubscriptionLifecycleIT extends BasePaymentIT {
         when(stripeClient.createSubscription(anyString(), anyString(), anyString(), anyString()))
             .thenReturn(mockStripeSub);
         when(stripeClient.updateSubscriptionTier(anyString(), anyString(), anyBoolean(), anyString()))
-            .thenReturn(mockStripeSub);
+            .thenReturn(new StripeClient.TierUpdate(mockStripeSub, true));
         when(stripeClient.cancelSubscriptionAtPeriodEnd(anyString()))
             .thenReturn(Instant.now().plus(30, ChronoUnit.DAYS));
     }
@@ -697,6 +697,47 @@ class SubscriptionLifecycleIT extends BasePaymentIT {
             "SELECT COUNT(*) FROM payment.coach_subscription_changes " +
             "WHERE coach_id = ? AND applied = false AND voided_at IS NULL",
             Long.class, coachId);
+    }
+
+    // ─── skillars-deferred-175 AC1 (RS05c): an old `incomplete` never overwrites the `active` the create response gave ──
+
+    @Autowired PaymentRecoveryRecorder paymentRecoveryRecorder;
+
+    private long parkedCount() {
+        return jdbcTemplate.queryForObject(
+            "SELECT COUNT(*) FROM payment.stripe_pending_subscription_events WHERE stripe_subscription_id = ?", Long.class, STRIPE_SUB_ID);
+    }
+
+    @Test
+    void parkedIncomplete_drainedAfterSubscribe_isIgnored_theRowStaysActive_andTheCoachKeepsTheTier() {
+        long before = Instant.now().minus(1, ChronoUnit.MINUTES).getEpochSecond();
+        assertThat(paymentRecoveryRecorder.parkSubscriptionEvent(new PaymentRecoveryRecorder.ParkedSubscriptionEvent(
+            "evt_175_incomplete", STRIPE_SUB_ID, "customer.subscription.updated", before, "incomplete", null, false, false))).isTrue();
+        try {
+            subscriptionService.subscribeCoach(coachId, COACH_USER_ID, "INSTRUCTOR"); // drains after the link commits
+
+            assertThat(paymentCoachSubscriptionRepository.findByCoachId(coachId).orElseThrow().getStatus()).isEqualTo("ACTIVE");
+            assertThat(marketplaceTier()).isEqualTo("INSTRUCTOR");
+            assertThat(parkedCount()).as("the ignored event's row is claimed").isZero();
+        } finally {
+            transactionTemplate.execute(s -> jdbcTemplate.update(
+                "DELETE FROM payment.stripe_pending_subscription_events WHERE stripe_subscription_id = ?", STRIPE_SUB_ID));
+        }
+    }
+
+    @Test
+    void liveIncomplete_afterSubscribe_isIgnored_butALivePastDueStillApplies() {
+        subscriptionService.subscribeCoach(coachId, COACH_USER_ID, "INSTRUCTOR");
+        long now = Instant.now().getEpochSecond();
+
+        subscriptionService.handleSubscriptionWebhook("customer.subscription.updated", STRIPE_SUB_ID,
+            Map.of("status", "incomplete", "event_created", now));
+        assertThat(paymentCoachSubscriptionRepository.findByCoachId(coachId).orElseThrow().getStatus()).isEqualTo("ACTIVE");
+        assertThat(marketplaceTier()).isEqualTo("INSTRUCTOR");
+
+        subscriptionService.handleSubscriptionWebhook("customer.subscription.updated", STRIPE_SUB_ID,
+            Map.of("status", "past_due", "event_created", now + 1));
+        assertThat(paymentCoachSubscriptionRepository.findByCoachId(coachId).orElseThrow().getStatus()).isEqualTo("PAST_DUE");
     }
 
     private String marketplaceTier() {

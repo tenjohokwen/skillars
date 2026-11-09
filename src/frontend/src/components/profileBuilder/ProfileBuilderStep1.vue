@@ -94,6 +94,7 @@ import { useI18n } from 'vue-i18n'
 import { sanitizePreview } from 'src/api/marketplace.api'
 import { useProfileBuilderStore } from 'src/stores/profileBuilder.store'
 import TimezoneSelect from './TimezoneSelect.vue'
+import { COACH_LANGUAGES } from 'src/utils/coachLanguages'
 
 const { t } = useI18n()
 const store = useProfileBuilderStore()
@@ -104,7 +105,7 @@ const props = defineProps({
   loading: { type: Boolean, default: false },
 })
 
-const languageOptions = ['English', 'German', 'French', 'Spanish', 'Arabic', 'Portuguese']
+const languageOptions = COACH_LANGUAGES
 
 // The coach picks a zone from the server's own list rather than having
 // Intl.DateTimeFormat().resolvedOptions().timeZone sent blind. A browser on newer tzdata than the

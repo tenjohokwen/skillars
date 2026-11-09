@@ -61,6 +61,10 @@ function mountPage(role, initialState = {}) {
         EditCoachAvailabilityDialog: true,
         EditCoachPhotoDialog: true,
         EditCoachBrandingDialog: true,
+        // Unstubbed, these two fetched from a real localhost:3000 on mount; the connection errors were logged
+        // after the run ended and failed CI at random (vitest "Closing rpc while onUserConsoleLog was pending").
+        EditCoachGalleryDialog: true,
+        NotificationPreferencesSection: true,
         EditPlayerPositionDialog: true,
         PrivacyDataSection: true,
         AppealAction: true,

@@ -47,7 +47,9 @@ public class AccountChangeEventListener {
             auditTrail.setEventTimestamp(ClockProvider.getClock().instant());
             auditTrail.setMsg("PROFILE_CHANGE: %s".formatted(event.getAction()));
             auditTrail.setLogin(event.getUserInfo().email());
-            auditTrail.setAuthenticated(true);
+            // skillars-deferred-172: an email change is confirmed and undone from links in mails, without a
+            // session; userInfo.email is the address the change was made from (confirm) or restored (undo).
+            auditTrail.setAuthenticated(!isFromEmailLink(event));
             auditTrail.setRelevantProperties(buildRelevantProperties(event));
             auditTrail.setUserAgent(clientInfo.getUserAgent());
             auditTrail.setIpAddress(clientInfo.getIpAddress());
@@ -73,6 +75,11 @@ public class AccountChangeEventListener {
                     kv("status", "RECORDED"));
             }
         }
+    }
+
+    private static boolean isFromEmailLink(AccountChangeEvent event) {
+        return event.getAction() == AccountChangeEvent.Action.EMAIL_CHANGED
+            || event.getAction() == AccountChangeEvent.Action.EMAIL_CHANGE_UNDONE;
     }
 
     private Map<String, Object> buildRelevantProperties(AccountChangeEvent event) {

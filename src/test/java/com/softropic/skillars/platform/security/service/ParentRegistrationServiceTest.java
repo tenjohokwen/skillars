@@ -64,6 +64,8 @@ class ParentRegistrationServiceTest {
     private static final String CONFIG_KEY = "security.registration.phone-otp-required";
 
     @Mock UserRepository userRepository;
+
+    @Mock com.softropic.skillars.platform.security.repo.EmailChangeRequestRepository emailChangeRequestRepository;
     @Mock AuthorityRepository authorityRepository;
     @Mock EmailVerificationTokenRepository emailTokenRepository;
     @Mock PhoneOtpTokenRepository otpTokenRepository;
@@ -79,7 +81,8 @@ class ParentRegistrationServiceTest {
 
     @BeforeEach
     void setUp() {
-        service = new ParentRegistrationService(userRepository, authorityRepository, emailTokenRepository,
+        service = new ParentRegistrationService(userRepository,
+            new EmailAddressAvailability(userRepository, emailChangeRequestRepository), authorityRepository, emailTokenRepository,
             otpTokenRepository, passwordEncoder, publisher, sanitizer, rateLimitingService, otpResendSupport,
             verificationTokenService, OtpHasherTest.hasher(), configService);
     }
@@ -260,7 +263,7 @@ class ParentRegistrationServiceTest {
             TimeUnit.MINUTES)).thenReturn(true);
         ParentRegistrationRequest req = new ParentRegistrationRequest(
             "Jane", "Doe", "Jane.Doe@Test.com", "password123", "+491701234567", " ");
-        when(userRepository.findOneByEmail("Jane.Doe@Test.com")).thenReturn(Optional.empty());
+        when(userRepository.findOneByEmail("jane.doe@test.com")).thenReturn(Optional.empty()); // looked up lowercased
         when(userRepository.findOneByPhoneNumber("+491701234567"))
             .thenReturn(Optional.of(existingAccount(8L, "holder@test.com")));
 
@@ -272,12 +275,13 @@ class ParentRegistrationServiceTest {
 
     @Test
     void registerParent_phoneHolderIsTheSameAddressInOtherLetters_isAnEmailMatch_noPhoneInUseMail() {
-        // The lookups are exact-case. The owner of jane.doe@test.com registering as Jane.Doe@Test.com
-        // with their own number must get the duplicate notice only, not "we couldn't create your account".
+        // Defence in depth: the email lookup is lowercased (skillars-deferred-172), but should an email match
+        // still miss, the owner of jane.doe@test.com registering as Jane.Doe@Test.com with their own number
+        // must get the duplicate notice only, not "we couldn't create your account".
         allowNotice();
         ParentRegistrationRequest req = new ParentRegistrationRequest(
             "Jane", "Doe", "Jane.Doe@Test.com", "password123", "+491701234567", "en");
-        when(userRepository.findOneByEmail("Jane.Doe@Test.com")).thenReturn(Optional.empty());
+        when(userRepository.findOneByEmail("jane.doe@test.com")).thenReturn(Optional.empty()); // looked up lowercased
         User owner = existingAccount(8L, "jane.doe@test.com");
         when(userRepository.findOneByPhoneNumber("+491701234567")).thenReturn(Optional.of(owner));
 

@@ -377,5 +377,47 @@ describe('PaymentMethodCard.vue (deferred-109 AC1)', () => {
       expect(wrapper.emitted('saved')).toBeTruthy()
       expect(wrapper.vm.cardError).toBeNull()
     })
+
+    // skillars-deferred-174 AC1: the server saves only a card attached to the caller's own Stripe customer.
+    it('a card the server refuses as not owned shows the notOwned message and does not emit saved', async () => {
+      const wrapper = await mountForm()
+      confirmCardSetup.mockResolvedValue({
+        setupIntent: { status: 'succeeded', payment_method: 'pm_foreign' },
+        error: undefined,
+      })
+      savePaymentMethod.mockRejectedValue({
+        response: {
+          status: 400,
+          data: {
+            errorMsg: {
+              errorKey: 'generic.requestError',
+              message: 'payment.paymentMethodNotOwned',
+            },
+          },
+        },
+      })
+
+      await wrapper.vm.submit()
+      await flushPromises()
+
+      expect(wrapper.vm.cardError).toBe('payment.card.notOwned')
+      expect(wrapper.emitted('saved')).toBeFalsy()
+    })
+
+    it('any other save failure keeps the generic save error', async () => {
+      const wrapper = await mountForm()
+      confirmCardSetup.mockResolvedValue({
+        setupIntent: { status: 'succeeded', payment_method: 'pm_ok' },
+        error: undefined,
+      })
+      savePaymentMethod.mockRejectedValue({
+        response: { status: 422, data: { errorMsg: { errorKey: 'payment.lifecycleFailure' } } },
+      })
+
+      await wrapper.vm.submit()
+      await flushPromises()
+
+      expect(wrapper.vm.cardError).toBe('payment.card.saveError')
+    })
   })
 })

@@ -63,6 +63,8 @@ class PlayerRegistrationServiceTest {
     private static final String CONFIG_KEY = "security.registration.phone-otp-required";
 
     @Mock UserRepository userRepository;
+
+    @Mock com.softropic.skillars.platform.security.repo.EmailChangeRequestRepository emailChangeRequestRepository;
     @Mock AuthorityRepository authorityRepository;
     @Mock EmailVerificationTokenRepository emailTokenRepository;
     @Mock PhoneOtpTokenRepository otpTokenRepository;
@@ -79,7 +81,8 @@ class PlayerRegistrationServiceTest {
 
     @BeforeEach
     void setUp() {
-        service = new PlayerRegistrationService(userRepository, authorityRepository, emailTokenRepository,
+        service = new PlayerRegistrationService(userRepository,
+            new EmailAddressAvailability(userRepository, emailChangeRequestRepository), authorityRepository, emailTokenRepository,
             otpTokenRepository, passwordEncoder, publisher, sanitizer, rateLimitingService, otpResendSupport,
             agePolicyService, verificationTokenService, OtpHasherTest.hasher(), configService);
     }

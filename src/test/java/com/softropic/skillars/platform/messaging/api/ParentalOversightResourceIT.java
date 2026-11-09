@@ -254,6 +254,56 @@ class ParentalOversightResourceIT extends AbstractIntegrationTest {
             });
     }
 
+    // ── A thread keeps the parent's id after the 18th birthday; it no longer grants access ──
+
+    @Test
+    void adultPlayersThread_parentReadsHistoryById_returns403() {
+        String parentCookies = loginAndGetCookies(PARENT_EMAIL);
+        assertParentRefused(() -> httpTestClient.makeHttpRequest(
+            baseUrl() + MESSAGING_BASE + "/conversations/" + ADULT_CONV_ID + "/messages",
+            HttpMethod.GET, null, authenticatedHeaders(parentCookies), Map.class));
+    }
+
+    @Test
+    void adultPlayersThread_parentSubscribesToLiveEvents_returns403() {
+        String parentCookies = loginAndGetCookies(PARENT_EMAIL);
+        assertParentRefused(() -> httpTestClient.makeHttpRequest(
+            baseUrl() + MESSAGING_BASE + "/conversations/" + ADULT_CONV_ID + "/events",
+            HttpMethod.GET, null, authenticatedHeaders(parentCookies), String.class));
+    }
+
+    @Test
+    void adultPlayersThread_parentReportsIt_returns403AndTheThreadStaysOpen() {
+        String parentCookies = loginAndGetCookies(PARENT_EMAIL);
+        assertParentRefused(() -> httpTestClient.makeHttpRequest(
+            baseUrl() + MESSAGING_BASE + "/conversations/" + ADULT_CONV_ID + "/report",
+            HttpMethod.POST, Map.of("reason", "HARASSMENT"), authenticatedHeaders(parentCookies), Map.class));
+        String status = jdbcTemplate.queryForObject(
+            "SELECT status FROM messaging.conversations WHERE id = ?", String.class, ADULT_CONV_ID);
+        assertThat(status).isEqualTo("ACTIVE");
+    }
+
+    @Test
+    void minorsThread_parentReadsHistoryById_returns200() {
+        // The guard is about age: the same parent still reads a 15-year-old's thread directly.
+        String parentCookies = loginAndGetCookies(PARENT_EMAIL);
+        ResponseEntity<Map> resp = httpTestClient.makeHttpRequest(
+            baseUrl() + MESSAGING_BASE + "/conversations/" + SUPERVISED_CONV_ID + "/messages",
+            HttpMethod.GET, null, authenticatedHeaders(parentCookies), Map.class);
+        assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat((List<?>) resp.getBody().get("content")).hasSize(1);
+    }
+
+    private void assertParentRefused(org.assertj.core.api.ThrowableAssert.ThrowingCallable call) {
+        assertThatThrownBy(call)
+            .isInstanceOf(HttpClientErrorException.class)
+            .satisfies(e -> {
+                HttpClientErrorException ex = (HttpClientErrorException) e;
+                assertThat(ex.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
+                assertThat(ex.getResponseBodyAsString()).contains("messaging.parentalOversightNotApplicable");
+            });
+    }
+
     // ── AC5: Coach cannot access parental oversight endpoint ──
 
     @Test

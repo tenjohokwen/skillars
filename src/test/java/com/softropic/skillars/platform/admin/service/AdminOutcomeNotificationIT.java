@@ -12,6 +12,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.context.ApplicationEventPublisher;
 
 import java.sql.Timestamp;
@@ -28,6 +29,7 @@ import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
  * B6 (feat/admin-outcome-notifications), end to end against the real database and the real event
@@ -222,23 +224,26 @@ class AdminOutcomeNotificationIT extends AbstractIntegrationTest {
     // ── issue 3: case-insensitive recipient lookup ─────────────────────────────
 
     @Test
-    void recipientLookup_matchesAnAddressRegardlessOfCase_butNeverPicksBetweenTwoCaseVariants() {
+    void recipientLookup_matchesAnAddressRegardlessOfCase_andTwoCaseVariantsCannotExist() {
         assertThat(recipientLookup.findByEmail(COACH_EMAIL.toLowerCase(), true))
             .hasValueSatisfying(r -> {
                 assertThat(r.userId()).isEqualTo(COACH_USER_ID);
                 assertThat(r.coach()).isTrue();
             });
 
+        // A row stored before V231 lowercased emails can still carry capitals; any casing finds it.
         transactionTemplate.execute(status -> {
-            insertUser(CASE_A_ID, "twin.outcome9176@skillars-test.com", "PARENT");
-            insertUser(CASE_B_ID, "Twin.Outcome9176@skillars-test.com", "PARENT");
+            insertUser(CASE_A_ID, "Twin.Outcome9176@skillars-test.com", "PARENT");
             return null;
         });
-        // An exact match still wins over the case-folded fallback ...
-        assertThat(recipientLookup.findByEmail("Twin.Outcome9176@skillars-test.com", false))
-            .hasValueSatisfying(r -> assertThat(r.userId()).isEqualTo(CASE_B_ID));
-        // ... and an ambiguous folded match resolves to nobody rather than to the wrong inbox.
-        assertThat(recipientLookup.findByEmail("TWIN.OUTCOME9176@SKILLARS-TEST.COM", false)).isEmpty();
+        assertThat(recipientLookup.findByEmail("TWIN.OUTCOME9176@SKILLARS-TEST.COM", false))
+            .hasValueSatisfying(r -> assertThat(r.userId()).isEqualTo(CASE_A_ID));
+        // skillars-deferred-172 (V231 ux_user_email_lower): a second case variant is refused, so the lookup's
+        // ambiguous-match branch can no longer be reached.
+        assertThatThrownBy(() -> transactionTemplate.execute(status -> {
+            insertUser(CASE_B_ID, "twin.outcome9176@skillars-test.com", "PARENT");
+            return null;
+        })).isInstanceOf(DuplicateKeyException.class);
     }
 
     // ── issue 4: admin_action_log CHECK parity ─────────────────────────────────

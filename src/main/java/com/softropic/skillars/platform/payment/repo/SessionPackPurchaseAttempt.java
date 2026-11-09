@@ -81,6 +81,20 @@ public class SessionPackPurchaseAttempt {
     @Column(name = "updated_at", nullable = false, insertable = false, updatable = false)
     private Instant updatedAt;
 
+    /**
+     * skillars-deferred-174 AC6: set once by the resolving job when only an operator can close this row; the job then skips
+     * it. Written by {@link SessionPackPurchaseAttemptRepository#markNeedsOperator}, never by {@code save}.
+     */
+    @Column(name = "needs_operator_since", insertable = false, updatable = false)
+    private Instant needsOperatorSince;
+
+    /** skillars-deferred-174 AC5: the admin who closed the row with the close action, and why. */
+    @Column(name = "closed_by", insertable = false, updatable = false)
+    private Long closedBy;
+
+    @Column(name = "close_reason", insertable = false, updatable = false)
+    private String closeReason;
+
     public SessionPackPurchaseAttempt(Long parentId, String attemptKey, UUID packTierId, Long playerId,
                                       String previousCard, String attemptedCard, boolean customerExisted) {
         this.parentId = parentId;

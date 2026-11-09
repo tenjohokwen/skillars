@@ -275,6 +275,15 @@ public final class ConfigBounds {
             "out-of-range falls back to the coded default (30); too low → a double charge becomes possible", 30L);
 
     /** skillars-deferred-169 AC1: how long terminal pack-purchase attempts are kept before the job purges them. */
+    /**
+     * skillars-deferred-174 AC6 (RS06e): how old an attempt whose charge is unreadable, or whose pack could not be recorded, must
+     * be before the resolving job stops retrying it and marks it for an operator. Below this, a brief Stripe or database
+     * outage heals on a later cycle; above it, the job would only repeat the same error every five minutes.
+     */
+    public static final BoundedKey PACK_ATTEMPT_OPERATOR_AFTER_MINUTES =
+        new BoundedKey("payment.packAttempt.operatorAfterMinutes", 15L, 1440L, false,
+            "out-of-range falls back to the coded default (60); too low → a brief outage becomes operator work", 60L);
+
     public static final BoundedKey PACK_ATTEMPT_RETENTION_DAYS =
         new BoundedKey("payment.packAttempt.retentionDays", 7L, 3650L, false,
             "out-of-range falls back to the coded default (30)", 30L);
@@ -769,6 +778,7 @@ public final class ConfigBounds {
         IDENTITY_AGE_VERIFICATION_MAX_ATTEMPTS_PER_DAY.key(),
         PACK_ATTEMPT_MIN_AGE_MINUTES.key(),
         PACK_ATTEMPT_ABSENCE_AGE_MINUTES.key(),
+        PACK_ATTEMPT_OPERATOR_AFTER_MINUTES.key(),
         PACK_ATTEMPT_RETENTION_DAYS.key(),
         PENDING_SUBSCRIPTION_EVENT_RETENTION_DAYS.key(),
         COACH_SAFEGUARDING_VALIDITY_YEARS.key(),
@@ -838,6 +848,7 @@ public final class ConfigBounds {
             IDENTITY_AGE_VERIFICATION_MAX_ATTEMPTS_PER_DAY,
             PACK_ATTEMPT_MIN_AGE_MINUTES,
             PACK_ATTEMPT_ABSENCE_AGE_MINUTES,
+            PACK_ATTEMPT_OPERATOR_AFTER_MINUTES,
             PACK_ATTEMPT_RETENTION_DAYS,
             PENDING_SUBSCRIPTION_EVENT_RETENTION_DAYS,
             COACH_SAFEGUARDING_VALIDITY_YEARS,

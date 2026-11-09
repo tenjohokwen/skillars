@@ -7,6 +7,15 @@ import com.softropic.skillars.infrastructure.security.SecurityConstants;
 
 import io.micrometer.observation.annotation.Observed;
 import jakarta.persistence.EntityNotFoundException;
+import jakarta.validation.Valid;
+import jakarta.validation.constraints.DecimalMax;
+import jakarta.validation.constraints.DecimalMin;
+import jakarta.validation.constraints.Digits;
+import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.NotNull;
+import jakarta.validation.constraints.Pattern;
+import jakarta.validation.constraints.Positive;
+import jakarta.validation.constraints.Size;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -31,7 +40,7 @@ import java.util.List;
  *
  * <p>POST /v1/admin/alerts       — create a new alert rule
  * GET  /v1/admin/alerts          — list all currently enabled alert rules (from cache)
- * PUT  /v1/admin/alerts/{id}     — update an existing alert rule (delete-then-save)
+ * PUT  /v1/admin/alerts/{id}     — update an existing alert rule in place
  */
 @Observed(name = "http.admin.alerts")
 @RestController
@@ -54,12 +63,12 @@ public class AlertRuleAdminResource {
      * @param description         human-readable description
      */
     public record AlertRuleRequest(
-            String metricName,
-            BigDecimal threshold,
-            int windowSeconds,
-            String notificationChannel,
+            @NotBlank @Size(max = 100) String metricName,
+            @NotNull @DecimalMin("0.0") @DecimalMax("1.0") @Digits(integer = 6, fraction = 4) BigDecimal threshold,
+            @Positive int windowSeconds,
+            @Pattern(regexp = "LOG|EMAIL") String notificationChannel,
             boolean enabled,
-            String description) {
+            @Size(max = 500) String description) {
 
         /** Compact canonical constructor — apply defaults for optional fields. */
         public AlertRuleRequest {
@@ -76,7 +85,7 @@ public class AlertRuleAdminResource {
      * @return 201 with saved entity
      */
     @PostMapping
-    public ResponseEntity<AlertRule> create(@RequestBody AlertRuleRequest request) {
+    public ResponseEntity<AlertRule> create(@Valid @RequestBody AlertRuleRequest request) {
         AlertRule rule = AlertRule.builder()
                 .metricName(request.metricName())
                 .threshold(request.threshold())
@@ -102,8 +111,8 @@ public class AlertRuleAdminResource {
     }
 
     /**
-     * Update an existing alert rule. Uses delete-then-save because AlertRule has no
-     * public setters (same pattern as FeeRuleAdminResource).
+     * Update an existing alert rule in place: one UPDATE of the same row, so the id is kept and a failed save
+     * leaves the old rule as it was.
      *
      * @param id      ID of the rule to update
      * @param request replacement rule parameters
@@ -111,21 +120,12 @@ public class AlertRuleAdminResource {
      */
     @PutMapping("/{id}")
     public ResponseEntity<AlertRule> update(@PathVariable Long id,
-                                            @RequestBody AlertRuleRequest request) {
-        alertRuleRepository.findById(id)
+                                            @Valid @RequestBody AlertRuleRequest request) {
+        AlertRule rule = alertRuleRepository.findById(id)
                 .orElseThrow(() -> new EntityNotFoundException("AlertRule not found: " + id));
-
-        alertRuleRepository.deleteById(id);
-
-        AlertRule updated = AlertRule.builder()
-                .metricName(request.metricName())
-                .threshold(request.threshold())
-                .windowSeconds(request.windowSeconds())
-                .notificationChannel(request.notificationChannel())
-                .enabled(request.enabled())
-                .description(request.description())
-                .build();
-        AlertRule saved = alertRuleRepository.save(updated);
+        rule.apply(request.metricName(), request.threshold(), request.windowSeconds(),
+                request.notificationChannel(), request.enabled(), request.description());
+        AlertRule saved = alertRuleRepository.save(rule);
         alertRuleCache.refresh();
         return ResponseEntity.ok(saved);
     }

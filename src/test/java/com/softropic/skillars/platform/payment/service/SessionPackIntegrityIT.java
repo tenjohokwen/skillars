@@ -47,6 +47,7 @@ import static org.mockito.Mockito.verify;
  * </ul>
  * Uses only the inherited spies ({@code paymentGateway}, {@code sessionPackPurchaseRepository}): no new
  * context-cache key.
+ * Purchases name no card: a payer without a Stripe customer cannot own one (skillars-deferred-174 AC1), and the UI never names one.
  */
 class SessionPackIntegrityIT extends BasePaymentIT {
 
@@ -96,8 +97,8 @@ class SessionPackIntegrityIT extends BasePaymentIT {
 
     @Test
     void sameAttemptKeyTwice_replaysTheCharge_returnsTheSamePack() {
-        SessionPackPurchaseResponse first = sessionPackPaymentService.purchasePack(PARENT_ID, tierId, PLAYER_ID, "pm_x", "attempt-key-0001");
-        SessionPackPurchaseResponse second = sessionPackPaymentService.purchasePack(PARENT_ID, tierId, PLAYER_ID, "pm_x", "attempt-key-0001");
+        SessionPackPurchaseResponse first = sessionPackPaymentService.purchasePack(PARENT_ID, tierId, PLAYER_ID, null, "attempt-key-0001");
+        SessionPackPurchaseResponse second = sessionPackPaymentService.purchasePack(PARENT_ID, tierId, PLAYER_ID, null, "attempt-key-0001");
 
         assertThat(second.purchaseId()).isEqualTo(first.purchaseId());
         assertThat(packCount()).isEqualTo(1);
@@ -106,8 +107,8 @@ class SessionPackIntegrityIT extends BasePaymentIT {
     /** A sibling's purchase of the same tier inside the same minute is a second pack, never a replay. */
     @Test
     void twoAttemptsOfTheSameTier_twoPacks_twoCharges() {
-        SessionPackPurchaseResponse first = sessionPackPaymentService.purchasePack(PARENT_ID, tierId, PLAYER_ID, "pm_x");
-        SessionPackPurchaseResponse second = sessionPackPaymentService.purchasePack(PARENT_ID, tierId, PLAYER_ID, "pm_x");
+        SessionPackPurchaseResponse first = sessionPackPaymentService.purchasePack(PARENT_ID, tierId, PLAYER_ID, null);
+        SessionPackPurchaseResponse second = sessionPackPaymentService.purchasePack(PARENT_ID, tierId, PLAYER_ID, null);
 
         assertThat(second.purchaseId()).isNotEqualTo(first.purchaseId());
         assertThat(second.stripePaymentIntentId()).isNotEqualTo(first.stripePaymentIntentId());
@@ -122,9 +123,9 @@ class SessionPackIntegrityIT extends BasePaymentIT {
      */
     @Test
     void doubleSubmit_isAnsweredFromTheAttemptRow_returnsTheWinner_neverRefundsIt() {
-        SessionPackPurchaseResponse winner = sessionPackPaymentService.purchasePack(PARENT_ID, tierId, PLAYER_ID, "pm_x", "attempt-key-0002");
+        SessionPackPurchaseResponse winner = sessionPackPaymentService.purchasePack(PARENT_ID, tierId, PLAYER_ID, null, "attempt-key-0002");
 
-        SessionPackPurchaseResponse loser = sessionPackPaymentService.purchasePack(PARENT_ID, tierId, PLAYER_ID, "pm_x", "attempt-key-0002");
+        SessionPackPurchaseResponse loser = sessionPackPaymentService.purchasePack(PARENT_ID, tierId, PLAYER_ID, null, "attempt-key-0002");
 
         assertThat(loser.purchaseId()).isEqualTo(winner.purchaseId());
         assertThat(packCount()).isEqualTo(1);
@@ -138,7 +139,7 @@ class SessionPackIntegrityIT extends BasePaymentIT {
         doThrow(new DataAccessResourceFailureException("db down"))
             .when(sessionPackPurchaseRepository).save(any(SessionPackPurchase.class));
 
-        assertThatThrownBy(() -> sessionPackPaymentService.purchasePack(PARENT_ID, tierId, PLAYER_ID, "pm_x", "attempt-key-0003"))
+        assertThatThrownBy(() -> sessionPackPaymentService.purchasePack(PARENT_ID, tierId, PLAYER_ID, null, "attempt-key-0003"))
             .isInstanceOf(PaymentGatewayException.class)
             .hasMessageContaining("payment.lifecycleFailure");
 

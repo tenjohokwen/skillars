@@ -44,7 +44,16 @@ class PackPriceLockedOnPurchaseTest {
     @Mock com.softropic.skillars.platform.config.service.ConfigService configService;
     @Mock com.softropic.skillars.platform.payment.repo.SessionPackPurchaseAttemptRepository attemptRepository;
 
+    // skillars-deferred-177 (RS03h): an existing customer's payer is checked before the charge; live here.
+    @Mock StripeCustomerCardWrites stripeCustomerCardWrites;
+
     @InjectMocks SessionPackPaymentService sessionPackPaymentService;
+
+    @org.junit.jupiter.api.BeforeEach
+    void payerIsLive() {
+        org.mockito.Mockito.lenient().when(stripeCustomerCardWrites.payerLive(any())).thenReturn(true);
+        org.mockito.Mockito.lenient().when(stripeCustomerCardWrites.writeCardIfPayerLive(any(), any())).thenReturn(true);
+    }
 
     private static final Long PARENT_ID = 7001L;
     private static final Long PLAYER_ID = 7002L;
@@ -89,7 +98,7 @@ class PackPriceLockedOnPurchaseTest {
         customer.setStripeCustomerId("cus_stub_" + PARENT_ID);
         when(stripeCustomerRepository.findById(PARENT_ID)).thenReturn(Optional.of(customer));
 
-        when(paymentGateway.chargeAndCapture(any(), any(), any(), any(), any())).thenReturn("pi_stub_123");
+        when(paymentGateway.chargeAndCapture(any(), any(), any(), any(), any(), any())).thenReturn("pi_stub_123");
         when(configService.getString("platform.commission.rate")).thenReturn("0.12");
 
         ArgumentCaptor<SessionPackPurchase> purchaseCaptor = ArgumentCaptor.forClass(SessionPackPurchase.class);
@@ -129,7 +138,7 @@ class PackPriceLockedOnPurchaseTest {
         when(playerProfileRepository.findById(PLAYER_ID))
             .thenReturn(Optional.of(parentOwnedPlayer()));
         when(stripeCustomerRepository.findById(PARENT_ID)).thenReturn(Optional.of(existingCustomer()));
-        when(paymentGateway.chargeAndCapture(any(), any(), any(), any(), any())).thenReturn("pi_stub_original");
+        when(paymentGateway.chargeAndCapture(any(), any(), any(), any(), any(), any())).thenReturn("pi_stub_original");
 
         ArgumentCaptor<SessionPackPurchase> firstCaptor = ArgumentCaptor.forClass(SessionPackPurchase.class);
         SessionPackPurchase firstPurchase = new SessionPackPurchase();
