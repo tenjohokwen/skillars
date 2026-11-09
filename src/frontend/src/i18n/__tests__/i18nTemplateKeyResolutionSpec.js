@@ -171,7 +171,7 @@ const DYNAMIC_KEY_CALL_SITES = [
     reason: "card title keyed by the current step config entry's titleKey",
   },
   {
-    at: 'src/pages/coach/CoachProfileBuilderPage.vue:130',
+    at: 'src/pages/coach/CoachProfileBuilderPage.vue:134',
     reason: 't() on a server-supplied errorKey, guarded by its own $te probe on the same line',
   },
   {

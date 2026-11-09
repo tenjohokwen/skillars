@@ -59,9 +59,13 @@
         </q-banner>
 
         <div class="profile-builder__panel">
-          <!-- Pitchside ONB-03: each step keeps what the coach typed when they go back or forward through the
-               rail; the steps hold their own form state, which used to be dropped on every step change. -->
-          <keep-alive>
+          <!-- Pitchside ONB-03: steps 1, 2 and 4 keep what the coach typed when they go back or forward through
+               the rail (they hold their own form state, which used to be dropped on every step change). Step 3
+               is left out on purpose: it is create-only and always starts with no pack, so that coming back can
+               never withdraw an offer the coach changed meanwhile (skillars-deferred-168, see its comment). -->
+          <keep-alive
+            :include="['ProfileBuilderStep1', 'ProfileBuilderStep2', 'ProfileBuilderStep4']"
+          >
             <ProfileBuilderStep1
               v-if="store.currentStep === 1"
               :loading="store.loading"

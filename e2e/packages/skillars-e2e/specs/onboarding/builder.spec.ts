@@ -81,7 +81,7 @@ test.describe('C · Coach onboarding — the wizard', () => {
   )
 
   test(
-    'going back and forward through the wizard keeps what was entered, availability rows included',
+    'going back and forward through the wizard keeps what was entered in steps 1 and 4, availability rows included',
     scenario({
       id: 'ONB-03',
       priority: 'P1',
@@ -104,12 +104,11 @@ test.describe('C · Coach onboarding — the wizard', () => {
       await expect(builder.stepIndicator()).toHaveText(stepOf(1))
       await expect(builder.displayName()).toHaveValue('Roundtrip Coaching')
       await expect(builder.city()).toHaveValue('Testville')
+      // Step 3 is create-only by design: it reopens with no pack, so returning can never withdraw an offer
+      // (skillars-deferred-168). The saved offer is untouched unless the coach fills in a new one.
       await builder.railSteps().nth(2).click()
-      await expect(builder.perSessionPrice()).toHaveValue('55')
-      await expect(builder.packRows()).toHaveCount(1)
-      await expect(builder.packRows().first().getByTestId('builder-pack-label')).toHaveValue(
-        'Starter 5',
-      )
+      await expect(builder.stepIndicator()).toHaveText(stepOf(3))
+      await expect(builder.packRows()).toHaveCount(0)
       await builder.railSteps().nth(3).click()
       await expect(builder.windowRows()).toHaveCount(1)
       await expect(builder.windowRows().first().getByTestId('builder-window-start')).toHaveValue(
