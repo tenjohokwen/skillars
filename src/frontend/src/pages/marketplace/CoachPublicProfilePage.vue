@@ -130,6 +130,7 @@
           <div
             v-if="reviewsTotalElements === 0"
             class="text-body2"
+            data-testid="coach-profile-reviews-empty"
             style="color: var(--text-secondary)"
           >
             {{ t('marketplace.noReviewsYet') }}

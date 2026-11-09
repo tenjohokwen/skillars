@@ -26,6 +26,21 @@ export class MarketplaceScreen extends Screen {
     await this.city().fill(city)
     await this.search().click()
   }
+
+  district = () => this.tid('marketplace-district')
+  ageGroup = () => this.tid('marketplace-age-group')
+  language = () => this.tid('marketplace-language')
+  sort = () => this.tid('marketplace-sort')
+  loadMore = () => this.tid('marketplace-load-more')
+  loading = () => this.tid('marketplace-loading')
+  clearFilters = () => this.tid('marketplace-clear-filters')
+
+  /** Choose a filter or sort option by its visible text; the page refreshes the results on change. */
+  async choose(select: Locator, label: string): Promise<void> {
+    await select.click()
+    await this.page.getByRole('option', { name: label, exact: true }).click()
+    await this.page.keyboard.press('Escape')
+  }
 }
 
 /** Reached from the profile's "Buy sessions", which adds the ?playerId the page needs. */
