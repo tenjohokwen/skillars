@@ -1,0 +1,41 @@
+{
+  "screen": "profile",
+  "accepted": [
+    {
+      "rule": "aria-required-parent",
+      "target": ".logout-item"
+    },
+    {
+      "rule": "button-name",
+      "target": ".glass-card.profile-section[data-v-19cd011b=\"\"]:nth-child(1) > .profile-row[data-v-19cd011b=\"\"]:nth-child(2) > .edit-btn.q-btn--round.q-btn--dense"
+    },
+    {
+      "rule": "button-name",
+      "target": ".glass-card.profile-section[data-v-19cd011b=\"\"]:nth-child(1) > .profile-row[data-v-19cd011b=\"\"]:nth-child(3) > .edit-btn.q-btn--round.q-btn--dense"
+    },
+    {
+      "rule": "button-name",
+      "target": ".glass-card.profile-section[data-v-19cd011b=\"\"]:nth-child(2) > .profile-row[data-v-19cd011b=\"\"]:nth-child(2) > .edit-btn.q-btn--round.q-btn--dense"
+    },
+    {
+      "rule": "button-name",
+      "target": ".glass-card.profile-section[data-v-19cd011b=\"\"]:nth-child(2) > .profile-row[data-v-19cd011b=\"\"]:nth-child(3) > .edit-btn.q-btn--round.q-btn--dense"
+    },
+    {
+      "rule": "button-name",
+      "target": ".glass-card.profile-section[data-v-19cd011b=\"\"]:nth-child(3) > .profile-row[data-v-19cd011b=\"\"] > .edit-btn.q-btn--round.q-btn--dense"
+    },
+    {
+      "rule": "button-name",
+      "target": ".privacy-btn"
+    },
+    {
+      "rule": "button-name",
+      "target": ".profile-row[data-v-19cd011b=\"\"]:nth-child(4) > .edit-btn.q-btn--round.q-btn--dense"
+    },
+    {
+      "rule": "meta-viewport",
+      "target": "meta[name=\"viewport\"]"
+    }
+  ]
+}

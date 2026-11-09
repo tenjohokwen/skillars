@@ -305,7 +305,7 @@ onUnmounted(() => {
   max-width: 400px;
   height: 56px;
   background: var(--accent-primary);
-  color: #fff;
+  color: var(--text-on-accent);
   font-size: 18px;
   font-weight: 600;
   border-radius: 12px;

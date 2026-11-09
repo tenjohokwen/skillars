@@ -1,0 +1,9 @@
+{
+  "screen": "coach profile",
+  "accepted": [
+    {
+      "rule": "meta-viewport",
+      "target": "meta[name=\"viewport\"]"
+    }
+  ]
+}

@@ -1,0 +1,9 @@
+{
+  "screen": "login",
+  "accepted": [
+    {
+      "rule": "meta-viewport",
+      "target": "meta[name=\"viewport\"]"
+    }
+  ]
+}

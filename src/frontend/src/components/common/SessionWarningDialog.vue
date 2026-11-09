@@ -37,6 +37,7 @@
 
         <q-linear-progress
           :value="progressValue"
+          :aria-label="$t('session.expiring')"
           :color="progressColor"
           size="8px"
           rounded

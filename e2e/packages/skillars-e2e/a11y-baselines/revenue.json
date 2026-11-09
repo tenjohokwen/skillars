@@ -1,0 +1,33 @@
+{
+  "screen": "revenue",
+  "accepted": [
+    {
+      "rule": "aria-required-parent",
+      "target": ".logout-item"
+    },
+    {
+      "rule": "color-contrast",
+      "target": ".summary-card.q-pa-md.glass-card:nth-child(1) > .text-caption.text-secondary[data-v-71cd32bd=\"\"]"
+    },
+    {
+      "rule": "color-contrast",
+      "target": ".summary-card.q-pa-md.glass-card:nth-child(2) > .text-caption.text-secondary[data-v-71cd32bd=\"\"]"
+    },
+    {
+      "rule": "color-contrast",
+      "target": ".summary-card.q-pa-md.glass-card:nth-child(3) > .text-caption.text-secondary[data-v-71cd32bd=\"\"]"
+    },
+    {
+      "rule": "color-contrast",
+      "target": ".summary-card.q-pa-md.glass-card:nth-child(4) > .text-caption.text-secondary[data-v-71cd32bd=\"\"]"
+    },
+    {
+      "rule": "color-contrast",
+      "target": ".summary-card.q-pa-md.glass-card:nth-child(5) > .text-caption.text-secondary[data-v-71cd32bd=\"\"]"
+    },
+    {
+      "rule": "meta-viewport",
+      "target": "meta[name=\"viewport\"]"
+    }
+  ]
+}

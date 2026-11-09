@@ -1,0 +1,17 @@
+{
+  "screen": "moderation",
+  "accepted": [
+    {
+      "rule": "aria-progressbar-name",
+      "target": ".text-grey-8"
+    },
+    {
+      "rule": "aria-required-parent",
+      "target": ".logout-item"
+    },
+    {
+      "rule": "meta-viewport",
+      "target": "meta[name=\"viewport\"]"
+    }
+  ]
+}

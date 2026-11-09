@@ -1,0 +1,17 @@
+{
+  "screen": "my players",
+  "accepted": [
+    {
+      "rule": "aria-required-parent",
+      "target": ".logout-item"
+    },
+    {
+      "rule": "meta-viewport",
+      "target": "meta[name=\"viewport\"]"
+    },
+    {
+      "rule": "nested-interactive",
+      "target": ".player-item"
+    }
+  ]
+}

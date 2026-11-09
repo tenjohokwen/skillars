@@ -325,6 +325,7 @@ function onDayClick(day) {
 
 .overlay-delete {
   background: none;
+  color: inherit;
   border: none;
   cursor: pointer;
   font-size: 0.65rem;

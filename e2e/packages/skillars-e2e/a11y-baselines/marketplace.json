@@ -1,0 +1,9 @@
+{
+  "screen": "marketplace",
+  "accepted": [
+    {
+      "rule": "meta-viewport",
+      "target": "meta[name=\"viewport\"]"
+    }
+  ]
+}

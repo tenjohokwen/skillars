@@ -18,6 +18,7 @@
     <q-item-section v-if="!notification.readAt" side>
       <span
         class="notification-item__dot"
+        role="img"
         :aria-label="t('notifications.unread')"
         data-testid="notification-unread-dot"
       />

@@ -9,6 +9,8 @@ import {
 import routes from './routes'
 import { useAuthStore } from 'src/stores/auth.store'
 import { useProfileBuilderStore } from 'src/stores/profileBuilder.store'
+import { Notify } from 'quasar'
+import { i18n } from 'src/boot/i18n'
 
 /*
  * If not building with SSR mode, you can
@@ -102,5 +104,40 @@ export default defineRouter(function (/* { store, ssrContext } */) {
     next()
   })
 
+  // Pitchside X-10: a page whose code cannot be fetched (offline, or a deploy replaced the chunk) used to abort the
+  // navigation silently: the click did nothing. Say so, and offer a retry. The browser caches a failed module
+  // import, so the retry is a full reload into the target route rather than another in-app navigation.
+  Router.onError((error, to) => {
+    if (!isChunkLoadError(error)) return
+    Notify.create({
+      type: 'negative',
+      message: i18n.global.t('common.pageLoadFailed'),
+      timeout: 0,
+      attrs: { 'data-testid': 'navigation-error' },
+      actions: [
+        {
+          label: i18n.global.t('common.retry'),
+          color: 'white',
+          'data-testid': 'navigation-retry',
+          handler: () => {
+            window.location.hash = `#${to.fullPath}`
+            window.location.reload()
+          },
+        },
+      ],
+    })
+  })
+
   return Router
 })
+
+/**
+ * A failed dynamic import (Chrome, Firefox and Safari word it differently), or Vite's own preload of the page's
+ * CSS failing first ("Unable to preload CSS for …"), which is what an offline navigation usually hits.
+ */
+export function isChunkLoadError(error) {
+  const message = String(error?.message ?? error ?? '')
+  return /dynamically imported module|Importing a module script failed|Failed to fetch|ChunkLoadError|Unable to preload/i.test(
+    message,
+  )
+}

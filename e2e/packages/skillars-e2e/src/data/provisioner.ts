@@ -2174,4 +2174,14 @@ export class Provisioner {
     )
     return row
   }
+
+  /** How many bookings a payer has made (any status). */
+  async bookingCount(payer: { userId: string }): Promise<number> {
+    const sql = await this.sql()
+    const [row] = await sql.query<{ n: string }>(
+      'SELECT count(*)::text AS n FROM booking.bookings WHERE parent_id = $1::bigint',
+      [payer.userId],
+    )
+    return Number(row?.n ?? 0)
+  }
 }

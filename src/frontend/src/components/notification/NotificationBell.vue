@@ -5,7 +5,7 @@
     dense
     icon="notifications"
     class="header-btn"
-    :aria-label="t('notifications.bellLabel')"
+    :aria-label="bellName"
     data-testid="notification-bell"
   >
     <q-badge
@@ -74,6 +74,12 @@ const router = useRouter()
 const store = useNotificationStore()
 
 const badgeLabel = computed(() => (store.unreadCount > 99 ? '99+' : String(store.unreadCount)))
+// The visible badge count is part of the accessible name (WCAG 2.5.3, label in name).
+const bellName = computed(() =>
+  store.unreadCount > 0
+    ? `${t('notifications.bellLabel')} ${badgeLabel.value}`
+    : t('notifications.bellLabel'),
+)
 
 function onOpen() {
   store.loadRecent()

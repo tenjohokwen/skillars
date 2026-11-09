@@ -76,10 +76,14 @@
       <div class="text-subtitle1 q-mb-md">{{ t('auth.parent.quickLinksTitle') }}</div>
 
       <div class="parent-dashboard__grid">
-        <router-link to="/parent/bookings" class="glass-card soft-hover parent-dashboard__tile">
+        <router-link
+          to="/parent/bookings"
+          class="glass-card soft-hover parent-dashboard__tile"
+          data-testid="upcoming-tile"
+        >
           <q-icon name="event" size="24px" style="color: var(--accent-primary)" />
           <div class="text-card-title q-mt-sm">{{ t('auth.parent.upcomingSessionsTitle') }}</div>
-          <div class="text-meta q-mt-xs">
+          <div class="text-meta q-mt-xs" data-testid="tile-value">
             <q-spinner-dots v-if="bookingStore.bookingsLoading" size="18px" />
             <template v-else-if="bookingStore.bookingsError">{{
               t('auth.parent.tileUnavailable')
@@ -99,10 +103,11 @@
         <router-link
           to="/parent/credit-wallet"
           class="glass-card soft-hover parent-dashboard__tile"
+          data-testid="wallet-tile"
         >
           <q-icon name="account_balance_wallet" size="24px" style="color: var(--accent-primary)" />
           <div class="text-card-title q-mt-sm">{{ t('auth.parent.creditWalletTitle') }}</div>
-          <div class="text-meta q-mt-xs">
+          <div class="text-meta q-mt-xs" data-testid="tile-value">
             <q-spinner-dots v-if="creditLoading" size="18px" />
             <template v-else-if="creditError">{{ t('auth.parent.tileUnavailable') }}</template>
             <template v-else>{{ formattedBalance }}</template>

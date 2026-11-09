@@ -18,6 +18,7 @@ import { fingerprintFor, guestFingerprint, type Provisioner } from './data/provi
 import { API_BASE_URL, E2E } from './env.js'
 import { stubStripeJs } from './stubs/stripe.js'
 import { taxonomy } from './taxonomy.js'
+import { fileURLToPath } from 'node:url'
 
 /**
  * The Skillars SuiteEnv. Everything app-specific the kernel needs is here; the kernel itself never
@@ -26,6 +27,8 @@ import { taxonomy } from './taxonomy.js'
 export const skillars = defineSuite({
   name: 'skillars',
   baseUrl: E2E.baseUrl,
+  // X-15: accepted axe findings per screen (regenerate with PITCHSIDE_A11Y_UPDATE=1); new ones fail.
+  a11yBaselineDir: fileURLToPath(new URL('../a11y-baselines', import.meta.url)),
   apiBaseUrl: API_BASE_URL,
   routing: hashRouting(E2E.baseUrl),
   // Login sets HttpOnly potc/rtkn/bcookie/ION plus the readable `skp` cookie the router guard

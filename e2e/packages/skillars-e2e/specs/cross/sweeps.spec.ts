@@ -43,7 +43,8 @@ function personaPages(fixtures: Fixtures, world: SweepWorld) {
 
 /** Raw message keys left on screen (`booking.packs.title`), by the app's real namespaces. */
 const RAW_KEY = new RegExp(
-  `\\b(?:${MESSAGE_NAMESPACES.join('|')})\\.[a-zA-Z0-9_]+(?:\\.[a-zA-Z0-9_]+)*\\b`,
+  // Not part of an email address: user text such as coach.e2e@example.com is not a message key.
+  `(?<![\\w.@-])(?:${MESSAGE_NAMESPACES.join('|')})\\.[a-zA-Z0-9_]+(?:\\.[a-zA-Z0-9_]+)*\\b(?![@.-]\\w)`,
   'g',
 )
 
