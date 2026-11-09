@@ -169,8 +169,10 @@ export class Provisioner {
       phone: this.nextPhone(),
       firstName: `${kind.charAt(0).toUpperCase()}${kind.slice(1)}`,
     }
+    // Player registration requires a date of birth (registerAndVerify's callers pass one too).
+    const dateOfBirth = kind === 'player' ? this.clock.dateOfBirthForAge(25).toISODate() : undefined
     await this.api(this.anonymous).post(`/security/${kind}/register`, {
-      data: { ...account, lastName, langKey: 'en' },
+      data: { ...account, lastName, langKey: 'en', ...(dateOfBirth ? { dateOfBirth } : {}) },
       expectStatus: 200,
     })
     return account

@@ -118,10 +118,12 @@ test.describe('A · Auth & session — account states and session lifetime', () 
       await expect(again.error()).toBeVisible()
       await expect(again.error()).not.toContainText(player.email)
       await expect(again.error()).not.toContainText(player.firstName)
-      // The first new password is still the one that works.
+      // The second attempt changed nothing: its password is refused, and the first new one still works.
       const login = await new LoginScreen(page, suite).open()
       await login.logIn(player.email, `${E2E.accountPassword}-3`)
       await expect(login.error()).toBeVisible()
+      await login.logIn(player.email, `${E2E.accountPassword}-2`)
+      await expect.poll(() => login.currentRoute()).not.toBe(R.login)
     },
   )
 
@@ -150,7 +152,7 @@ test.describe('A · Auth & session — account states and session lifetime', () 
       // session ends in four minutes, as the browser sees it: 'rint' is the absolute expiry the server sets
       // (epoch ms), which the app's session monitor reads every 30 s.
       await page.waitForLoadState('networkidle')
-      const host = new URL(E2E.baseUrl).hostname
+      const host = new URL(suite.baseUrl).hostname
       await self.context.addCookies([
         {
           name: 'rint',
