@@ -452,7 +452,10 @@ const routes = [
           {
             path: 'safeguarding',
             component: () => import('pages/admin/AdminSafeguardingPage.vue'),
-            meta: { requiresAuth: true, roles: ['ADMIN'] },
+            // Owner decision 2026-11-08 (ADM-03): every safeguarding endpoint is full-admin only (criminal-record
+            // certificates stay with the smallest group of staff), so a limited admin is sent to the
+            // "requires administrator" page rather than loading into 403s.
+            meta: { requiresAuth: true, roles: ['ADMIN'], fullAdmin: true },
           },
           {
             path: 'users',

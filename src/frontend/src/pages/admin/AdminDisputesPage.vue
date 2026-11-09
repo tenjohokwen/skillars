@@ -1,6 +1,6 @@
 <template>
   <q-page class="q-pa-md">
-    <div class="app-page fade-in">
+    <div class="app-page fade-in" data-testid="admin-disputes-page">
       <div class="page-header q-mb-xl">
         <div class="text-page-title">{{ t('admin.disputes.title') }}</div>
         <div class="text-meta">{{ t('admin.disputes.subtitle') }}</div>
@@ -41,6 +41,7 @@
               color="primary"
               :label="t('admin.disputes.view')"
               data-testid="dispute-row-view-btn"
+              :data-dispute-id="props.row.disputeId"
               @click="openDetail(props.row.disputeId)"
             />
           </q-td>
@@ -48,7 +49,12 @@
       </q-table>
 
       <div v-if="totalPages > 1" class="q-mt-md flex flex-center">
-        <q-pagination v-model="currentPage" :max="totalPages" @update:model-value="loadPage" />
+        <q-pagination
+          v-model="currentPage"
+          :max="totalPages"
+          data-testid="admin-pagination"
+          @update:model-value="loadPage"
+        />
       </div>
     </div>
 

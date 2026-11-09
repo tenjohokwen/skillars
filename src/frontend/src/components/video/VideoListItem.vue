@@ -8,6 +8,21 @@
       >
         {{ video.title }}
       </div>
+      <q-chip
+        v-if="unavailable"
+        dense
+        square
+        color="grey-7"
+        text-color="white"
+        icon="block"
+        class="q-mb-xs"
+        data-testid="video-access-state"
+        :data-state="video.accessState"
+      >
+        {{
+          video.accessState === 'ARCHIVED' ? t('video.access.ARCHIVED') : t('video.access.BLOCKED')
+        }}
+      </q-chip>
       <VideoStatusCard
         :video-id="video.id"
         :initial-status="video.operationalState"
@@ -17,7 +32,7 @@
     </div>
     <div class="column q-ml-sm q-mt-lg q-gutter-xs">
       <q-btn
-        v-if="video.operationalState === 'READY'"
+        v-if="video.operationalState === 'READY' && !unavailable"
         flat
         round
         icon="play_circle"
@@ -52,6 +67,7 @@
 </template>
 
 <script setup>
+import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import VideoStatusCard from 'src/components/video/VideoStatusCard.vue'
 
@@ -61,7 +77,7 @@ import VideoStatusCard from 'src/components/video/VideoStatusCard.vue'
  * (ParentChildVideosPage — play / delete). Play is offered only for READY videos: the backend's
  * playback eligibility is READY + ACTIVE, and anything else would just 4xx.
  */
-defineProps({
+const props = defineProps({
   video: { type: Object, required: true },
   canRetry: { type: Boolean, default: false },
   canDelete: { type: Boolean, default: true },
@@ -72,4 +88,8 @@ defineProps({
 const emit = defineEmits(['play', 'retry', 'delete', 'status-changed'])
 
 const { t } = useI18n()
+
+// Pitchside ADM-11: a video an admin blocked (or the lifecycle archived) is not playable, so it shows why and
+// offers no Play. An absent accessState (older payloads) counts as ACTIVE.
+const unavailable = computed(() => (props.video.accessState ?? 'ACTIVE') !== 'ACTIVE')
 </script>

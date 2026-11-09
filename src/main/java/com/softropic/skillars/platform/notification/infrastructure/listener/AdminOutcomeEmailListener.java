@@ -4,6 +4,9 @@ import com.softropic.skillars.infrastructure.web.FrontendLinkBuilder;
 import com.softropic.skillars.platform.admin.contract.AdminNotificationRecipient;
 import com.softropic.skillars.platform.admin.contract.CoachReinstatedEvent;
 import com.softropic.skillars.platform.admin.contract.CoachSuspensionNotificationEvent;
+import com.softropic.skillars.platform.admin.contract.AppealDecidedEvent;
+import com.softropic.skillars.platform.admin.contract.AppealStatus;
+import com.softropic.skillars.platform.admin.contract.AppealSubjectType;
 import com.softropic.skillars.platform.admin.contract.CoachWarningIssuedEvent;
 import com.softropic.skillars.platform.admin.contract.DisputeCoachUpheldEvent;
 import com.softropic.skillars.platform.admin.contract.DisputeDismissedEvent;
@@ -108,6 +111,32 @@ public class AdminOutcomeEmailListener {
         data.put("requestedStartTime", instant(event.sessionStart()));
         putUpholdOutcome(data, event.outcome(), event.audience());
         send(EmailTemplate.DISPUTE_COACH_UPHELD, event.recipient(), data, "disputeId", event.disputeId());
+    }
+
+    /** Owner decision 2026-11-08 (ADM-09): the appellant learns the outcome of their appeal and the admin's note. */
+    @TransactionalEventListener(phase = TransactionPhase.BEFORE_COMMIT)
+    public void onAppealDecided(AppealDecidedEvent event) {
+        Map<String, Object> data = new HashMap<>();
+        data.put("appealSubject", event.subjectType() == null ? "" : event.subjectType().name());
+        data.put("decisionNote", text(event.decisionNote()));
+        data.put("pageUrl", frontendLinks.route(appealPage(event.subjectType())));
+        // "reversed" only when the reversal really happened; otherwise the email says the appeal was accepted.
+        data.put("reversalApplied", Boolean.TRUE.equals(event.reversalApplied()) ? "true" : "false");
+        EmailTemplate template = event.outcome() == AppealStatus.OVERTURNED
+            ? EmailTemplate.APPEAL_OVERTURNED : EmailTemplate.APPEAL_UPHELD;
+        send(template, event.recipient(), data, "appealId", event.appealId());
+    }
+
+    /** Where the appealed thing lives for its appellant. */
+    private static String appealPage(AppealSubjectType type) {
+        if (type == null) {
+            return "dashboard";
+        }
+        return switch (type) {
+            case RELIABILITY_STRIKE -> "coach/reliability";
+            case COACH_SUSPENSION -> "profile";
+            case REVIEW_BLOCK, DISPUTE_RESOLUTION -> "dashboard";
+        };
     }
 
     /** UPHOLD_COACH facts, string-typed; nothing is added for any other resolution. */

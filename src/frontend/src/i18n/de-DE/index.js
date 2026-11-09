@@ -821,6 +821,10 @@ export default {
     },
   },
   video: {
+    access: {
+      BLOCKED: 'Nicht verfügbar: von Skillars gesperrt',
+      ARCHIVED: 'Nicht verfügbar: archiviert',
+    },
     player: {
       title: 'Video',
       playAriaLabel: 'Video abspielen',
@@ -2862,6 +2866,9 @@ export default {
       COACH_SAFEGUARDING_EXPIRING:
         'Ihr Kinderschutz-Check läuft am {expiresAt} ab. Verlängern Sie ihn, damit er in Ihrem Profil bleibt.',
       REVIEW_BLOCKED: 'Ihre Bewertung von {coachDisplayName} wurde nicht veröffentlicht.',
+      APPEAL_UPHELD:
+        'Ihr Einspruch wurde geprüft: Die ursprüngliche Entscheidung bleibt bestehen. Die E-Mail nennt den Grund.',
+      APPEAL_OVERTURNED: 'Ihrem Einspruch wurde stattgegeben. Details stehen in der E-Mail.',
     },
     preferences: {
       title: 'E-Mail-Benachrichtigungen',

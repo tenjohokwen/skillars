@@ -1,6 +1,6 @@
 <template>
   <q-page class="q-pa-md">
-    <div class="app-page fade-in">
+    <div class="app-page fade-in" data-testid="admin-users-page">
       <div class="page-header q-mb-lg">
         <div class="text-page-title">{{ t('admin.users.title') }}</div>
         <div class="text-meta">{{ t('admin.users.subtitle') }}</div>
@@ -69,6 +69,7 @@
               color="primary"
               :label="t('admin.users.view')"
               data-testid="user-row-view-btn"
+              :data-user-id="props.row.userId"
               @click="openDetail(props.row.userId)"
             />
           </q-td>

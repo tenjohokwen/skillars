@@ -35,7 +35,7 @@ public final class NotificationCatalog {
         "coachDisplayName", "coachName", "playerName", "parentName",
         "requestedStartTime", "originalStartTime", "proposedStartTime", "newStartTime",
         "canonicalTimezone", "creditsRemaining", "expiresAt", "newExpiresAt",
-        "requestedCount", "acceptedCount", "reportDate", "reminderType", "videoType");
+        "requestedCount", "acceptedCount", "reportDate", "reminderType", "videoType", "appealSubject");
 
     private NotificationCatalog() {
     }
@@ -116,6 +116,10 @@ public final class NotificationCatalog {
             // profile says (never opt-out-able); the check is managed on /coach/safeguarding.
             case COACH_SAFEGUARDING_EXPIRING -> inApp(NotificationCategory.ACCOUNT, "/coach/safeguarding", DASHBOARD);
             case COACH_WARNING_ISSUED -> inApp(NotificationCategory.MODERATION, COACH_RELIABILITY, DASHBOARD);
+            // Owner decision 2026-11-08 (ADM-09): an appeal's outcome. MODERATION, transactional. The deep link is the
+            // email's own pageUrl (where the appealed thing lives: reliability, profile, dashboard). The admin's note is
+            // free text, so it travels in the email only (PARAM_WHITELIST keeps it out of the inbox row).
+            case APPEAL_UPHELD, APPEAL_OVERTURNED -> new Entry(NotificationCategory.MODERATION, true, null, DASHBOARD, "pageUrl");
             // Dispute outcome to whoever raised it: a coach, a parent, or a self-registered player.
             case DISPUTE_RESOLVED, DISPUTE_DISMISSED -> inApp(NotificationCategory.BOOKING, COACH_BOOKINGS, PARENT_BOOKINGS);
             // The other side of an UPHOLD_COACH resolution (feat/payment-forfeit-payouts-and-clawback).

@@ -1,6 +1,6 @@
 <template>
   <q-page class="q-pa-md">
-    <div class="app-page fade-in">
+    <div class="app-page fade-in" data-testid="admin-bookings-page">
       <div class="page-header q-mb-lg">
         <div class="text-page-title">{{ t('admin.bookings.title') }}</div>
         <div class="text-meta">{{ t('admin.bookings.subtitle') }}</div>

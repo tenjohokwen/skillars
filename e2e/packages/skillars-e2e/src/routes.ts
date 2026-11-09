@@ -71,6 +71,14 @@ export const R = {
   adminFinance: '/admin/finance',
   adminGdpr: '/admin/gdpr',
   adminConfig: '/admin/config',
+  adminDisputes: '/admin/disputes',
+  adminModeration: '/admin/moderation',
+  adminCoaches: '/admin/coaches',
+  adminSafeguarding: '/admin/safeguarding',
+  adminUsers: '/admin/users',
+  adminAppeals: '/admin/appeals',
+  adminVideos: '/admin/videos',
+  adminBookings: '/admin/bookings',
 } as const
 
 /** Where each role lands after login (src/frontend/src/router/roleRoutes.js). */

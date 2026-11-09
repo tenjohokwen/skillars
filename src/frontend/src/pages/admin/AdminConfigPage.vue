@@ -1,6 +1,6 @@
 <template>
   <q-page class="q-pa-md">
-    <div class="app-page fade-in">
+    <div class="app-page fade-in" data-testid="admin-config-page">
       <div class="page-header q-mb-lg">
         <div class="text-page-title">{{ t('admin.config.title') }}</div>
         <div class="text-meta">{{ t('admin.config.subtitle') }}</div>
@@ -73,6 +73,7 @@
               color="primary"
               :label="t('common.edit')"
               data-testid="config-edit-btn"
+              :data-key="props.row.key"
               @click="openEdit(props.row)"
             />
           </q-td>

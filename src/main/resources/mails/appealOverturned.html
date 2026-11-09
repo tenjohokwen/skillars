@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org">
+<head>
+    <meta charset="UTF-8">
+    <title th:text="#{email.admin.appeal_overturned.title}">Your Appeal Was Successful</title>
+</head>
+<body>
+    <h2 th:text="#{email.admin.appeal_overturned.title}">Your Appeal Was Successful</h2>
+    <p th:if="${map.reversalApplied == 'true'}">A Skillars administrator reviewed your appeal and reversed the original decision.</p>
+    <p th:unless="${map.reversalApplied == 'true'}">A Skillars administrator reviewed your appeal and accepted it. The original decision could not be undone automatically; the Skillars team will follow up with you about what happens next.</p>
+    <p th:switch="${map.appealSubject}">Your appeal was about
+        <span th:case="'RELIABILITY_STRIKE'">a reliability strike</span>
+        <span th:case="'COACH_SUSPENSION'">the suspension of your coach profile</span>
+        <span th:case="'REVIEW_BLOCK'">a review that was blocked</span>
+        <span th:case="'DISPUTE_RESOLUTION'">the resolution of a dispute</span>
+        <span th:case="*">an earlier decision</span>.
+    </p>
+    <p>The administrator's note: <em th:text="${map.decisionNote}">note</em></p>
+    <p>You can see the details here: <a th:href="${map.pageUrl}" th:text="${map.pageUrl}">Skillars</a></p>
+</body>
+</html>
