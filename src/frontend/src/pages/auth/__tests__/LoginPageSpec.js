@@ -119,3 +119,30 @@ describe('LoginPage.vue — open-redirect guard (skillars-deferred-144 AC3)', ()
     expect(router.currentRoute.value.path).toBe('/dashboard')
   })
 })
+
+describe('LoginPage.vue — account states (Pitchside AUTH-05)', () => {
+  afterEach(() => {
+    while (mounted.length) mounted.pop().unmount()
+    vi.clearAllMocks()
+  })
+
+  const rejectWith = (status, errorKey) =>
+    authApi.skillarsLogin.mockRejectedValue({
+      response: { status, data: { errorMsg: { errorKey } } },
+    })
+
+  it('shows the not-verified banner for an unactivated account (401 security.accNotEnabled)', async () => {
+    rejectWith(401, 'security.accNotEnabled')
+    const { wrapper } = await mountPage()
+    await submitLogin(wrapper)
+    expect(wrapper.find('[data-testid="login-not-verified-banner"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="login-error"]').exists()).toBe(false)
+  })
+
+  it('keeps the plain error, not the banner, for bad credentials', async () => {
+    rejectWith(401, 'security.badCredentials')
+    const { wrapper } = await mountPage()
+    await submitLogin(wrapper)
+    expect(wrapper.find('[data-testid="login-not-verified-banner"]').exists()).toBe(false)
+  })
+})

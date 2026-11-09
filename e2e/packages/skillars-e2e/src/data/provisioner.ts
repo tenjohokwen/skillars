@@ -159,6 +159,23 @@ export class Provisioner {
     }
   }
 
+  /** Registered, but the emailed verification link was never followed (AUTH-05). No user id: it cannot log in. */
+  async unverified(kind: AccountKind = 'parent'): Promise<Omit<Account, 'userId'>> {
+    const [, lastName = 'Tester'] = this.names.personName('x').split(' ')
+    const account = {
+      kind,
+      email: this.names.email(`u${kind}`),
+      password: E2E.accountPassword,
+      phone: this.nextPhone(),
+      firstName: `${kind.charAt(0).toUpperCase()}${kind.slice(1)}`,
+    }
+    await this.api(this.anonymous).post(`/security/${kind}/register`, {
+      data: { ...account, lastName, langKey: 'en' },
+      expectStatus: 200,
+    })
+    return account
+  }
+
   /** Register and verify by email. The phone-OTP step is off by default (seeded config). */
   async registerAndVerify(
     kind: AccountKind,

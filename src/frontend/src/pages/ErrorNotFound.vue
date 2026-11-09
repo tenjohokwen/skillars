@@ -1,5 +1,5 @@
 <template>
-  <div class="error-page app-bg">
+  <div class="error-page app-bg" data-testid="not-found-page">
     <div class="error-content fade-in">
       <div class="error-number gradient-text">404</div>
       <div class="text-page-title q-mb-sm">{{ $t('errorPage.notFoundTitle') }}</div>
