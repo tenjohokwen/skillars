@@ -46,6 +46,9 @@ export default defineRouter(function (/* { store, ssrContext } */) {
       hydrated = true
     }
 
+    // Pitchside X-12: every redirect below REPLACES the blocked entry. A navigation the browser started (a typed
+    // or pasted URL, a plain link, a hash change) has already pushed that entry; pushing the redirect on top
+    // left it behind, so Back returned to the guarded route and the guard sent the user forward again, for ever.
     const requiresAuth = to.matched.some((r) => r.meta.requiresAuth)
     const requiresGuest = to.matched.some((r) => r.meta.requiresGuest)
     const requiresCoach = to.matched.some((r) => r.meta.requiresCoach)
@@ -61,34 +64,34 @@ export default defineRouter(function (/* { store, ssrContext } */) {
     const isAuthenticated = authStore.isAuthenticated
 
     if (requiresAuth && !isAuthenticated) {
-      next({ path: '/login', query: { redirect: to.fullPath } })
+      next({ path: '/login', query: { redirect: to.fullPath }, replace: true })
       return
     }
 
     if (requiresGuest && isAuthenticated) {
-      next(routeForRole(authStore.role))
+      next({ path: routeForRole(authStore.role), replace: true })
       return
     }
 
     if (requiresCoach && isAuthenticated && !authStore.isCoach) {
-      next(routeForRole(authStore.role))
+      next({ path: routeForRole(authStore.role), replace: true })
       return
     }
 
     if (isAuthenticated && requiredRoles.some((role) => role !== authStore.role)) {
-      next(routeForRole(authStore.role))
+      next({ path: routeForRole(authStore.role), replace: true })
       return
     }
 
     if (requiresOneOfRoles && isAuthenticated && !rolesMeta.includes(authStore.role)) {
-      next(routeForRole(authStore.role))
+      next({ path: routeForRole(authStore.role), replace: true })
       return
     }
 
     // S-28: pages whose every action needs a full administrator (finance, GDPR, config). A limited
     // administrator gets an explanation instead of a page full of 403s. The API enforces this too.
     if (isAuthenticated && authStore.limitedAdmin && to.matched.some((r) => r.meta.fullAdmin)) {
-      next('/admin/requires-administrator')
+      next({ path: '/admin/requires-administrator', replace: true })
       return
     }
 
@@ -96,7 +99,7 @@ export default defineRouter(function (/* { store, ssrContext } */) {
       const pbStore = useProfileBuilderStore()
       await pbStore.loadStatus()
       if (!pbStore.isComplete) {
-        next('/coach/profile-builder')
+        next({ path: '/coach/profile-builder', replace: true })
         return
       }
     }
