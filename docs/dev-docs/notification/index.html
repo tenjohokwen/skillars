@@ -173,7 +173,10 @@
         its owner-flagged handler is an <code>@EventListener</code> that opens its own <code>TransactionTemplate</code>
         transaction, because the async moderation pipeline publishes with none);
         <code>Coach</code>/<code>Parent</code>/<code>PlayerRegistrationEmailListener</code>
-        (<code>platform.security</code>). <code>SessionPackExpiryNotifier</code> (payment) publishes the event that
+        (<code>platform.security</code>). <code>EmailChangeService</code> (<code>platform.security</code>) calls
+        <code>enqueueEmail</code> directly inside the transaction that decides to send, with no event in between, and
+        <code>RegistrationDuplicateAttemptListener.onReservedAddressAttempt</code> enqueues the reserved-address notice.
+        <code>SessionPackExpiryNotifier</code> (payment) publishes the event that
         <code>SessionPackEmailListener</code> turns into an enqueue.</li>
       <li><strong>Direct-publish shape</strong> (<code>new Envelope(...)</code> + <code>publishEvent</code>, sent by
         <code>MailManager.sendEmailFromTemplate</code> <code>AFTER_COMMIT</code>; inbox row written by
@@ -204,7 +207,7 @@
         <tr><td>POST</td><td><code>/api/notifications/unsubscribe?token=</code></td><td>RFC 8058 one-click unsubscribe (token in query string or form body). POST only — no GET, so link scanners cannot unsubscribe anyone. Returns the category.</td><td>Public (exact path in <code>AppEndpoints.PUBLIC_ENDPOINTS</code>); rate-limited</td></tr>
         <tr><td>POST</td><td><code>/v1/admin/alerts</code></td><td>Create an alert rule.</td><td><code>HAS_FULL_ADMIN_ROLE</code> (<code>ROLE_ADMIN</code> only)</td></tr>
         <tr><td>GET</td><td><code>/v1/admin/alerts</code></td><td>List enabled rules (from the in-memory cache).</td><td><code>HAS_FULL_ADMIN_ROLE</code></td></tr>
-        <tr><td>PUT</td><td><code>/v1/admin/alerts/{id}</code></td><td>Update (delete-then-save) and refresh the cache.</td><td><code>HAS_FULL_ADMIN_ROLE</code></td></tr>
+        <tr><td>PUT</td><td><code>/v1/admin/alerts/{id}</code></td><td>Update the rule in place (same row, same id) and refresh the cache. The body is validated on POST and PUT: 400 for a blank metric name, a threshold outside 0–1, a non-positive window or a channel other than LOG/EMAIL, and the stored rule is left as it was.</td><td><code>HAS_FULL_ADMIN_ROLE</code></td></tr>
         <tr><td>POST</td><td><code>/v1/admin/ses/preflight</code></td><td>Body <code>{recipientEmail}</code>. Live (uncached) SES <code>GetAccount</code> via <code>SesAccountChecker.checkLive()</code> plus a real test send of <code>SES_CUTOVER_PREFLIGHT</code> through <code>sendEmailSync</code> with a fresh <code>sendId</code>; returns <code>{accountCheck, testSend, ready}</code>. Bean only exists when <code>app.email.transport=ses</code>.</td><td><code>HAS_FULL_ADMIN_ROLE</code></td></tr>
       </tbody>
     </table>
@@ -287,6 +290,19 @@
       <code>disputeWindowDays</code> (<code>disputes.submissionWindowDays</code>, 14) and a <code>bookingsUrl</code>, and are
       in-app <code>BOOKING</code> rows deep-linking to the parent bookings page. <code>BookingEmailListener</code> now has
       24 handlers.</p>
+    <p><strong>Account email change (V232).</strong> Three <code>ACCOUNT</code>-category, email-only templates, all
+      enqueued through the outbox by the security module (see
+      <a href="../security/index.html#account-email-change">Security: account email change</a>):</p>
+    <table>
+      <tr><th>Template</th><th>Recipient</th><th>Data</th></tr>
+      <tr><td><code>EMAIL_CHANGE</code> (<code>emailChange.html</code>)</td><td>The <em>new</em> address, on a request whose address is free</td><td><code>confirmUrl</code> (24 h link)</td></tr>
+      <tr><td><code>EMAIL_CHANGED_NOTICE</code> (<code>emailChangedNotice.html</code>)</td><td>The <em>old</em> address, at confirm (undo link); also the restored address after an undo on a suspended or not-activated account, and the <em>new</em> address after every undo</td><td>Default: <code>newEmailMasked</code>, <code>undoUrl</code>, <code>undoDays</code> (7). <code>undone</code> true: "your address was restored" wording, no link. <code>revertedAway</code> true (to the new address): <code>oldEmailMasked</code>, "if this wasn't you, contact support with the help code"</td></tr>
+      <tr><td><code>EMAIL_CHANGE_ADDRESS_IN_USE</code> (<code>emailChangeAddressInUse.html</code>)</td><td>The holder of an address someone tried to move another account onto, or tried to register while it is reserved</td><td><code>reserved</code> false: sent by <code>EmailChangeService</code> to the holder's current email, with a sign-in link. <code>reserved</code> true: sent to the reserved address itself (by <code>EmailChangeService</code>, or by <code>RegistrationDuplicateAttemptListener</code> for a registration), pointing at the undo link. Never to a GDPR-erased tombstone</td></tr>
+    </table>
+    <p>A normal undo sends <code>PASSWORD_RESET</code> to the restored address instead of a notice. All carry
+      <code>helpCode</code>. <code>AccountChangeEmailListener</code> now returns early for <code>EMAIL_CHANGED</code> and
+      <code>EMAIL_CHANGE_UNDONE</code> (audit-only), so <code>PROFILE_CHANGE</code> is no longer sent for an email
+      change; it still is for the other profile changes.</p>
     <p>Internally: <code>Envelope</code> (published by direct-publish producers; consumed <code>BEFORE_COMMIT</code> by
       <code>InAppEnvelopeListener</code> and <code>AFTER_COMMIT</code> by <code>MailManager</code>) and
       <code>AlertFiredEvent</code> (<code>AlertEvaluationService</code> → <code>AlertNotificationListener</code>).</p>
@@ -452,8 +468,7 @@ sequenceDiagram
       (6) if in-app, a <code>notifications.types.&lt;TYPE&gt;</code> text in the frontend en-US/de-DE/fr-FR i18n, and add
       any new display params to <code>NotificationCatalog.PARAM_WHITELIST</code>.</p>
       <p>Step (3) is now enforced: <code>EmailTemplateFileParityTest</code> fails when a constant has no
-      <code>mails/&lt;lowerCamelCase&gt;.html</code> (exemptions: <code>NONE</code>, and <code>COACH_VISIBILITY_REDUCED</code> /
-      <code>EMAIL_CHANGE</code>, which nothing sends, and the three <code>@Deprecated</code> <code>VIDEO_APPROVAL_*</code>
+      <code>mails/&lt;lowerCamelCase&gt;.html</code> (exemptions: <code>NONE</code>, <code>COACH_VISIBILITY_REDUCED</code>, which nothing sends, and the three <code>@Deprecated</code> <code>VIDEO_APPROVAL_*</code>
       constants whose bodies V184 removed). Before C6, <code>BOOKING_CANCELLED_BY_PARENT</code>,
       <code>BOOKING_CANCELLED_BY_COACH</code>, <code>COACH_NO_SHOW</code> and <code>PLAYER_NO_SHOW</code> had no body and
       <code>PACK_PAUSED</code>'s was misnamed <code>sessionPackPaused.html</code>: Thymeleaf's
@@ -501,9 +516,10 @@ sequenceDiagram
       startup on an unrecognised transport value but accepts an absent one (falls back to <code>log</code>).</p>
     </div>
     <div class="callout warn">
-      <p><code>AlertRule</code> has no setters (Lombok <code>@SuperBuilder</code> only), so
-      <code>AlertRuleAdminResource.update()</code> is delete-then-recreate — the row's id and audit history are not
-      preserved across an update.</p>
+      <p><code>AlertRule</code> has no per-field setters (Lombok <code>@SuperBuilder</code>); edits go through its one
+      <code>apply(...)</code> method, so <code>AlertRuleAdminResource.update()</code> is a single UPDATE of the same row.
+      It used to delete the rule and save a new one in a separate transaction, which lost the rule when the save failed
+      and changed its id even when it worked (skillars-deferred-173).</p>
     </div>
     <div class="callout">
       <p><code>EnvelopeEntity</code> has no <code>@Table(schema=...)</code>, but Hibernate's <code>default_schema</code> is
@@ -541,7 +557,7 @@ sequenceDiagram
       <li><a href="../index.html">Home</a></li>
     </ul>
 
-    <footer class="page-footer">Last verified against master <code>1ee47152</code> (2026-10-31).</footer>
+    <footer class="page-footer">Last verified against master <code>0eaf7e6b</code> (2026-11-05).</footer>
   </main>
 </div>
 <script src="../assets/mermaid.min.js"></script>

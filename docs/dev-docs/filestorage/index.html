@@ -164,7 +164,7 @@
       <tr><td>POST</td><td><code>/api/storage/sign/upload</code></td><td>Validate and quota-check a proposed upload (<code>{entity, entityId, contentType, extension, fileSizeBytes, checksum?, tags?}</code>) and return <code>{key, uploadUrl, expiresAt}</code>.</td><td><code>HAS_ANY_ROLE</code>. For the owner-bound entities <code>coach_profile</code>, <code>coach_branding</code> and <code>coach_gallery</code> (matched after sanitizing, so <code>coach profile</code> counts), <code>entityId</code> must equal the caller's business id (otherwise <code>AccessDeniedException</code>, 403). Enforced in <code>FileStorageService.signUpload</code>.</td></tr>
       <tr><td>POST</td><td><code>/api/storage/confirm/**</code></td><td>Confirm a completed upload (<code>{contentType, fileSizeBytes, originalFilename?, checksum?, tags?}</code>): HEAD-check, persist the FSO (and a REPLICATE job if replication is on), then publish <code>StorageObjectConfirmedEvent</code>. A repeat confirm returns the existing record and, within the upload window, publishes the event again.</td><td><code>HAS_ANY_ROLE</code>. Owner-bound keys must carry the caller's id (else 403). A repeat confirm must come from the FSO's owner and the FSO must not be soft-deleted (else 404). A new key must be a <code>StorageKeyGenerator</code> key (else 404).</td></tr>
       <tr><td>GET</td><td><code>/api/storage/sign/download/**</code></td><td>Presign a short-lived <code>GET</code> for a confirmed, non-deleted key and log a <code>StorageAccessEvent</code>.</td><td><code>HAS_ANY_ROLE</code>. Caller must be the FSO's owner or an admin. Anyone else gets 404, so the endpoint does not reveal that the key exists, and no access event is written.</td></tr>
-      <tr><td>DELETE</td><td><code>/api/storage/**</code></td><td>Soft-delete a file. Allowed only for the original uploader (<code>createdBy</code>).</td><td><code>HAS_ANY_ROLE</code></td></tr>
+      <tr><td>DELETE</td><td><code>/api/storage/**</code></td><td>Soft-delete a file. Allowed only for its owner (<code>ownerId</code>, the uploader's business id; not <code>createdBy</code>, the login at upload time, which an email change makes stale).</td><td><code>HAS_ANY_ROLE</code></td></tr>
     </table>
     <p>
       Errors (global <code>security.api.ApiAdvice</code>): <code>QuotaExceededException</code> → <strong>429</strong>,
@@ -298,7 +298,7 @@ sequenceDiagram
   participant GenOutbox as platform.outbox (BLOB_DELETION)
 
   Caller->>Service: DELETE /api/storage/{key} (or CoachGalleryService/CoachProfileService.softDelete)
-  Service->>Service: createdBy == current login? softDeleteByKey
+  Service->>Service: ownerId == current business id? softDeleteByKey
   Service-->>Caller: 204 (deleted_at set)
 
   loop every app.storage.poller.fixed-delay-ms (ShedLock)
@@ -442,8 +442,7 @@ sequenceDiagram
         (<code>BlobDeletionOutboxSupport.enqueue</code> for export, child-report, coach-report, gallery, coach-photo and branding-logo keys).</li>
       <li><a href="../booking/index.html">Booking</a> — no live dependency. Legacy wrap-up voice-note objects
         (<code>entity=booking</code>) may still exist.</li>
-      <li><a href="../security/index.html">Security</a> — <code>SecurityUtil</code> (business id for owner and quota, login for
-        <code>createdBy</code> delete checks), and <code>security.api.ApiAdvice</code>, which maps this module's exceptions to HTTP.</li>
+      <li><a href="../security/index.html">Security</a> — <code>SecurityUtil</code> (business id for owner, quota and delete checks), and <code>security.api.ApiAdvice</code>, which maps this module's exceptions to HTTP.</li>
       <li><a href="../infrastructure/index.html">Infrastructure</a> — <code>infrastructure.blobstore</code> (the storage back end,
         <code>BlobstoreProperties</code>, <code>StorageMetrics</code>).</li>
       <li>Outbox (<code>platform.outbox</code>) — the generic transactional outbox (<code>OutboxService</code>) that stores and

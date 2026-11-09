@@ -51,8 +51,22 @@
             </template>
           </q-input>
 
+          <!-- skillars-deferred-172: refusals the dialog words itself (they carry no translatable key) -->
+          <q-banner
+            v-if="ownError"
+            class="bg-negative text-white"
+            rounded
+            data-test="email-own-error"
+          >
+            {{ ownError }}
+          </q-banner>
+
           <!-- Error banner -->
-          <q-banner v-if="hasError && !isValidationError" class="bg-negative text-white" rounded>
+          <q-banner
+            v-else-if="hasError && !isValidationError"
+            class="bg-negative text-white"
+            rounded
+          >
             {{ errorMessage }}
             <template v-if="helpCode">
               <br />
@@ -81,7 +95,6 @@ import { useQuasar } from 'quasar'
 import { useI18n } from 'vue-i18n'
 import { profileApi } from 'src/api/profile.api'
 import { useErrorHandler } from 'src/composables/useErrorHandler'
-import { useSession } from 'src/composables/useSession'
 
 const props = defineProps({
   modelValue: {
@@ -98,7 +111,6 @@ const emit = defineEmits(['update:modelValue', 'updated'])
 
 const $q = useQuasar()
 const { t } = useI18n()
-const { handleLogout } = useSession()
 const {
   setError,
   clearError,
@@ -121,12 +133,14 @@ const form = ref({
 })
 const isPwd = ref(true)
 const isSubmitting = ref(false)
+const ownError = ref('')
 
 // Validation rules
 const required = (val) => !!val || t('validation.required')
 const validEmail = (val) => /.+@.+\..+/.test(val) || t('validation.email')
 const minLen5 = (val) => val.length >= 5 || t('validation.minLength', { min: 5 })
-const notSameEmail = (val) => val !== form.value.oldEmail || t('validation.sameEmail')
+const notSameEmail = (val) =>
+  val.trim().toLowerCase() !== form.value.oldEmail.trim().toLowerCase() || t('validation.sameEmail')
 
 // Watch for external changes to modelValue
 watch(
@@ -139,6 +153,7 @@ watch(
       form.value.newEmail = ''
       form.value.password = ''
       isPwd.value = true
+      ownError.value = ''
       clearError()
     }
   },
@@ -153,21 +168,43 @@ function close() {
   dialogVisible.value = false
 }
 
+// skillars-deferred-172: nothing changes until the link mailed to the new address is opened, so the user stays
+// signed in here. The answer is the same whether or not the address can be used (no enumeration).
 async function handleSubmit() {
   clearError()
+  ownError.value = ''
   isSubmitting.value = true
   try {
     await profileApi.updateEmail(form.value.oldEmail, form.value.newEmail, form.value.password)
     $q.notify({
       type: 'positive',
       message: t('success.emailChangeInitiated'),
+      timeout: 8000,
     })
     close()
-    await handleLogout()
   } catch (err) {
-    setError(err)
+    ownError.value = ownErrorText(err)
+    if (!ownError.value) setError(err)
   } finally {
     isSubmitting.value = false
   }
+}
+
+/** The 409 inside the undo window (its message is the ISO end) and the per-account 429; '' for anything else. */
+function ownErrorText(err) {
+  const msg = err?.response?.data?.errorMsg
+  if (msg?.errorKey === 'email.change.recentChange') {
+    const until = new Date(msg.message)
+    const date = Number.isNaN(until.getTime())
+      ? ''
+      : new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' }).format(
+          until,
+        )
+    return t('profile.emailChange.recentChange', { date })
+  }
+  if (err?.response?.status === 429) {
+    return t('profile.emailChange.tooManyRequests')
+  }
+  return ''
 }
 </script>

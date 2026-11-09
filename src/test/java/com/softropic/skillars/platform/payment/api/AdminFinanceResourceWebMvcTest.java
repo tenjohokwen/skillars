@@ -61,6 +61,8 @@ class AdminFinanceResourceWebMvcTest {
     @MockitoBean JwtSecretService jwtSecretService;
     @MockitoBean VideoMetrics videoMetrics;
     @MockitoBean CoachPayoutHoldRecoveryService coachPayoutHoldRecoveryService;
+    @MockitoBean com.softropic.skillars.platform.payment.service.SessionPackPaymentService sessionPackPaymentService;
+    @MockitoBean com.softropic.skillars.platform.security.service.SecurityUtil securityUtil;
 
     private static final AdminFinanceOverviewDto ZERO_OVERVIEW = new AdminFinanceOverviewDto(
         BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
@@ -167,5 +169,75 @@ class AdminFinanceResourceWebMvcTest {
             .andExpect(status().isOk())
             .andExpect(jsonPath("$.released").value(2))
             .andExpect(jsonPath("$.stillFrozen").value(1));
+    }
+
+    // ── skillars-deferred-174 AC5 (RS06b): close a stuck pack purchase attempt ───────────────────────────────────
+
+    private static final String CLOSE = "/api/admin/payment/pack-attempts/{id}/close";
+
+    @Test
+    @WithMockUser(roles = "LTD_ADMIN")
+    void closePackAttempt_ltdAdmin_returns403_neverReachesTheService() throws Exception {
+        mockMvc.perform(post(CLOSE, 77L).contentType(org.springframework.http.MediaType.APPLICATION_JSON)
+                .content("{\"reason\":\"stuck\"}"))
+            .andExpect(status().isForbidden());
+        org.mockito.Mockito.verifyNoInteractions(sessionPackPaymentService);
+    }
+
+    @Test
+    @WithMockUser(roles = "PARENT")
+    void closePackAttempt_nonAdmin_returns403() throws Exception {
+        mockMvc.perform(post(CLOSE, 77L).contentType(org.springframework.http.MediaType.APPLICATION_JSON)
+                .content("{\"reason\":\"stuck\"}"))
+            .andExpect(status().isForbidden());
+        org.mockito.Mockito.verifyNoInteractions(sessionPackPaymentService);
+    }
+
+    @Test
+    @WithMockUser(roles = "ADMIN")
+    void closePackAttempt_blankOrTooLongReason_returns400() throws Exception {
+        mockMvc.perform(post(CLOSE, 77L).contentType(org.springframework.http.MediaType.APPLICATION_JSON)
+                .content("{\"reason\":\"  \"}"))
+            .andExpect(status().isBadRequest());
+        mockMvc.perform(post(CLOSE, 77L).contentType(org.springframework.http.MediaType.APPLICATION_JSON)
+                .content("{\"reason\":\"" + "x".repeat(501) + "\"}"))
+            .andExpect(status().isBadRequest());
+        mockMvc.perform(post(CLOSE, 77L).contentType(org.springframework.http.MediaType.APPLICATION_JSON)
+                .content("{}"))
+            .andExpect(status().isBadRequest());
+        org.mockito.Mockito.verifyNoInteractions(sessionPackPaymentService);
+    }
+
+    @Test
+    @WithMockUser(roles = "ADMIN")
+    void closePackAttempt_admin_returnsTheClosedStatus_andPassesWhoAndWhy() throws Exception {
+        when(securityUtil.requireCurrentUserId()).thenReturn(5L);
+        when(sessionPackPaymentService.closeAttemptByAdmin(77L, 5L, "x".repeat(500)))
+            .thenReturn(new com.softropic.skillars.platform.payment.contract.PackAttemptCloseResponse(77L, "NO_CHARGE"));
+
+        mockMvc.perform(post(CLOSE, 77L).contentType(org.springframework.http.MediaType.APPLICATION_JSON)
+                .content("{\"reason\":\"" + "x".repeat(500) + "\"}"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.attemptId").value(77))
+            .andExpect(jsonPath("$.status").value("NO_CHARGE"));
+    }
+
+    @Test
+    @WithMockUser(roles = "ADMIN")
+    void closePackAttempt_errorsMapTo404_409_422() throws Exception {
+        when(securityUtil.requireCurrentUserId()).thenReturn(5L);
+        when(sessionPackPaymentService.closeAttemptByAdmin(eq(1L), any(), any()))
+            .thenThrow(new ResourceNotFoundException("Pack purchase attempt not found", "session_pack_purchase_attempt"));
+        when(sessionPackPaymentService.closeAttemptByAdmin(eq(2L), any(), any()))
+            .thenThrow(new org.springframework.web.server.ResponseStatusException(
+                org.springframework.http.HttpStatus.CONFLICT, "payment.packAttempt.capturedNoPack"));
+        when(sessionPackPaymentService.closeAttemptByAdmin(eq(3L), any(), any()))
+            .thenThrow(new com.softropic.skillars.platform.payment.contract.exception.PaymentGatewayException("payment.lifecycleFailure"));
+
+        for (long[] idAndStatus : new long[][] {{1L, 404}, {2L, 409}, {3L, 422}}) {
+            mockMvc.perform(post(CLOSE, idAndStatus[0]).contentType(org.springframework.http.MediaType.APPLICATION_JSON)
+                    .content("{\"reason\":\"stuck\"}"))
+                .andExpect(status().is((int) idAndStatus[1]));
+        }
     }
 }

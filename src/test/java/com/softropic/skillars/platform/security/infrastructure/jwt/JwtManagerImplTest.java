@@ -629,6 +629,34 @@ public class JwtManagerImplTest {
                                            org.assertj.core.api.Assertions.within(1_500L));
     }
 
+    /** skillars-deferred-179: the fast path verifies the JWT once, not once per claim it carries forward. */
+    @Test
+    void testExtendTtlOfToken_parsesTheJwtOnce_andCarriesEveryClaimForward() throws JsonProcessingException {
+        initRequestMetadata();
+        Principal principal = createPrincipal(Set.of(new SimpleGrantedAuthority(ROLE_USER)));
+        // a login token, so it carries SESSION_ISSUED_AT and RTKN_SESSION as well
+        MockHttpServletResponse login = new MockHttpServletResponse();
+        jwtManager.createLoginToken(login, principal, UUID.randomUUID());
+        String token = extractCookie(login, JWT_COOKIE_NAME);
+        ClaimsExtractor spied = org.mockito.Mockito.spy(claimsExtractor);
+        JwtManagerImpl manager = new JwtManagerImpl(tokenCreator, new TokenValidatorImpl(spied), spied);
+        MockHttpServletRequest req = new MockHttpServletRequest();
+        req.setCookies(new Cookie(JWT_COOKIE_NAME, token));
+        MockHttpServletResponse res = new MockHttpServletResponse();
+
+        manager.extendTtlOfToken(req, res);
+
+        org.mockito.Mockito.verify(spied, org.mockito.Mockito.times(1)).extractClaims(token);
+        Claims before = claimsExtractor.extractClaims(token);
+        Claims after = claimsExtractor.extractClaims(extractCookie(res, JWT_COOKIE_NAME));
+        assertThat(after.getSubject()).isEqualTo(before.getSubject());
+        assertThat(after.get(DB_REFRESH_TOKEN, Long.class)).isEqualTo(before.get(DB_REFRESH_TOKEN, Long.class));
+        assertThat(before.get(com.softropic.skillars.infrastructure.security.SecurityConstants.SESSION_ISSUED_AT)).isNotNull();
+        assertThat(before.get(com.softropic.skillars.infrastructure.security.SecurityConstants.RTKN_SESSION)).isNotNull();
+        assertThat(after.get(com.softropic.skillars.infrastructure.security.SecurityConstants.SESSION_ISSUED_AT)).isEqualTo(before.get(com.softropic.skillars.infrastructure.security.SecurityConstants.SESSION_ISSUED_AT));
+        assertThat(after.get(com.softropic.skillars.infrastructure.security.SecurityConstants.RTKN_SESSION)).isEqualTo(before.get(com.softropic.skillars.infrastructure.security.SecurityConstants.RTKN_SESSION));
+    }
+
     @Test
     void testExtendTtlOfToken_anonymousPrincipal_shouldThrowException() {
         initRequestMetadata();

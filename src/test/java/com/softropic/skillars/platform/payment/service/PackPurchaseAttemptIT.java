@@ -101,6 +101,26 @@ class PackPurchaseAttemptIT extends BasePaymentIT {
         assertThat(attempts.findById(id).orElseThrow().getStatus()).isEqualTo(Status.SUCCEEDED);
     }
 
+    /**
+     * skillars-deferred-178 (review round 3): an unknown charge outcome reopens a NO_CHARGE attempt as UNKNOWN, and the
+     * open-attempt index refuses that once the parent has started another purchase (the alert path then takes over).
+     */
+    @Test
+    void reopeningANoChargeAttempt_isAllowed_untilTheParentHasAnotherOpenAttempt() {
+        Long first = attempts.saveAndFlush(newAttempt(PARENT, "key-aaaaaaaa")).getId();
+        attempts.transition(first, Status.NO_CHARGE, null, EnumSet.of(Status.IN_PROGRESS));
+        assertThat(attempts.existsByIdAndStatus(first, Status.NO_CHARGE)).isTrue();
+        assertThat(attempts.existsByIdAndStatusNot(first, Status.IN_PROGRESS)).isTrue();
+
+        assertThat(attempts.transition(first, Status.UNKNOWN, null, EnumSet.of(Status.NO_CHARGE))).isTrue();
+        attempts.transition(first, Status.NO_CHARGE, null, EnumSet.of(Status.UNKNOWN));
+
+        attempts.saveAndFlush(newAttempt(PARENT, "key-bbbbbbbb")); // the parent bought again
+        assertThatThrownBy(() -> attempts.transition(first, Status.UNKNOWN, null, EnumSet.of(Status.NO_CHARGE)))
+            .isInstanceOf(DataIntegrityViolationException.class);
+        assertThat(attempts.existsByIdAndStatus(first, Status.NO_CHARGE)).isTrue();
+    }
+
     @Test
     void purge_removesOldTerminalAttempts_andNeverAnOpenOne() {
         Long terminal = attempts.saveAndFlush(newAttempt(PARENT, "key-aaaaaaaa")).getId();
@@ -127,6 +147,88 @@ class PackPurchaseAttemptIT extends BasePaymentIT {
         SessionPackPurchaseAttempt row = attempts.findById(id).orElseThrow();
         assertThat(row.getPreviousCard()).isNull();
         assertThat(row.getAttemptedCard()).isNull();
+    }
+
+    // ── skillars-deferred-174 AC5/AC6 (RS06b, RS06e): the needs-operator mark and the admin close ──
+
+    @Autowired SessionPackPaymentService sessionPackPaymentService;
+
+    private void ageAttempts(long parent, String interval) {
+        transactionTemplate.execute(s -> {
+            jdbcTemplate.update("UPDATE payment.session_pack_purchase_attempts SET created_at = now() - CAST(? AS interval) "
+                + "WHERE parent_id = ?", interval, parent);
+            return null;
+        });
+    }
+
+    @Test
+    void needsOperator_isSetOnce_onlyOnAnOpenRow_andTheJobsWorkListSkipsIt() {
+        Long marked = attempts.saveAndFlush(newAttempt(PARENT, "key-aaaaaaaa")).getId();
+        Long other = attempts.saveAndFlush(newAttempt(OTHER_PARENT, "key-aaaaaaaa")).getId();
+        ageAttempts(PARENT, "2 hours");
+        ageAttempts(OTHER_PARENT, "2 hours");
+        var open = Status.OPEN.stream().map(Enum::name).toList();
+
+        assertThat(attempts.markNeedsOperator(marked, open)).isEqualTo(1);
+        assertThat(attempts.markNeedsOperator(marked, open)).as("one-shot").isZero();
+        assertThat(attempts.findById(marked).orElseThrow().getNeedsOperatorSince()).isNotNull();
+
+        assertThat(attempts.findOpenOlderThan(Status.OPEN, java.time.Instant.now()))
+            .extracting(SessionPackPurchaseAttempt::getId).contains(other).doesNotContain(marked);
+        // still open: it keeps holding the parent's one open attempt
+        assertThatThrownBy(() -> attempts.saveAndFlush(newAttempt(PARENT, "key-bbbbbbbb")))
+            .isInstanceOf(DataIntegrityViolationException.class);
+
+        attempts.transition(other, Status.SUCCEEDED, "pi_1", EnumSet.of(Status.IN_PROGRESS));
+        assertThat(attempts.markNeedsOperator(other, open)).as("never on a closed row").isZero();
+    }
+
+    @Test
+    void adminClose_nothingChargedPastTheAbsenceAge_closesAsNoCharge_recordsWhoAndWhy_andFreesTheParent() {
+        Long id = attempts.saveAndFlush(newAttempt(PARENT, "key-aaaaaaaa")).getId();
+        ageAttempts(PARENT, "2 hours");
+        attempts.markNeedsOperator(id, Status.OPEN.stream().map(Enum::name).toList());
+
+        var response = sessionPackPaymentService.closeAttemptByAdmin(id, 42L, "parent blocked; nothing in Stripe");
+
+        assertThat(response.status()).isEqualTo("NO_CHARGE");
+        SessionPackPurchaseAttempt row = attempts.findById(id).orElseThrow();
+        assertThat(row.getStatus()).isEqualTo(Status.NO_CHARGE);
+        assertThat(row.getClosedBy()).isEqualTo(42L);
+        assertThat(row.getCloseReason()).isEqualTo("parent blocked; nothing in Stripe");
+        assertThat(row.getNeedsOperatorSince()).as("cleared by the close").isNull();
+        // AC5e: the partial unique index no longer holds the parent
+        attempts.saveAndFlush(newAttempt(PARENT, "key-bbbbbbbb"));
+    }
+
+    // skillars-deferred-176 AC4 (RS06i): an absence verdict never closes an UNRECONCILED row, not even the operator's; only its
+    // stored PaymentIntent can (unit-tested in SessionPackPaymentServiceTest), and this one has none
+    @Test
+    void adminClose_anUnreconciledAttemptWithoutAStoredIntent_isRefusedAsCapturedNoPack_rowUnchanged() {
+        Long id = attempts.saveAndFlush(newAttempt(PARENT, "key-aaaaaaaa")).getId();
+        attempts.transition(id, Status.UNRECONCILED, null, EnumSet.of(Status.IN_PROGRESS));
+        ageAttempts(PARENT, "2 hours");
+
+        assertThatThrownBy(() -> sessionPackPaymentService.closeAttemptByAdmin(id, 42L, "Stripe shows no charge"))
+            .isInstanceOf(org.springframework.web.server.ResponseStatusException.class)
+            .hasMessageContaining("payment.packAttempt.capturedNoPack");
+
+        SessionPackPurchaseAttempt row = attempts.findById(id).orElseThrow();
+        assertThat(row.getStatus()).isEqualTo(Status.UNRECONCILED);
+        assertThat(row.getClosedBy()).isNull();
+    }
+
+    @Test
+    void adminClose_tooRecentToTrustTheAbsence_isRefused_rowUnchanged() {
+        Long id = attempts.saveAndFlush(newAttempt(PARENT, "key-aaaaaaaa")).getId();
+
+        assertThatThrownBy(() -> sessionPackPaymentService.closeAttemptByAdmin(id, 42L, "stuck"))
+            .isInstanceOf(org.springframework.web.server.ResponseStatusException.class)
+            .hasMessageContaining("payment.packAttempt.tooRecent");
+
+        SessionPackPurchaseAttempt row = attempts.findById(id).orElseThrow();
+        assertThat(row.getStatus()).isEqualTo(Status.IN_PROGRESS);
+        assertThat(row.getClosedBy()).isNull();
     }
 
     // ── RS05: the parked event commits independently of the webhook's own transaction ──
@@ -167,6 +269,37 @@ class PackPurchaseAttemptIT extends BasePaymentIT {
         assertThat(pendingEvents.claim(id)).isEqualTo(0);
     }
 
+    // ── skillars-deferred-175 AC2 (RS-poison): the retention purge keeps a linked row ──
+
+    @Test
+    void thePurge_keepsALinkedRowPastRetention_andDeletesANeverLinkedOne() {
+        recorder.parkSubscriptionEvent(parked("evt_it169_5", "sub_it169_linked", 100L));
+        recorder.parkSubscriptionEvent(parked("evt_it169_6", "sub_it169_orphan", 100L));
+        insertTestParent(175002L, "it175.parent@test.com");
+        insertTestPlayer(175002L, 175002L);
+        transactionTemplate.execute(s -> {
+            jdbcTemplate.update("INSERT INTO payment.player_subscriptions (player_id, stripe_subscription_id) VALUES (175002, 'sub_it169_linked')");
+            jdbcTemplate.update("UPDATE payment.stripe_pending_subscription_events SET created_at = now() - interval '40 days' "
+                + "WHERE stripe_subscription_id LIKE 'sub_it169_%'");
+            return null;
+        });
+        try {
+            java.time.Instant cutoff = java.time.Instant.now().minus(30, java.time.temporal.ChronoUnit.DAYS);
+
+            assertThat(pendingEvents.purgeOlderThan(cutoff)).isEqualTo(1);
+            assertThat(pendingEvents.countLinkedOlderThan(cutoff)).isEqualTo(1);
+            assertThat(pendingEvents.findBySubscriptionOrdered("sub_it169_linked")).hasSize(1);
+            assertThat(pendingEvents.findBySubscriptionOrdered("sub_it169_orphan")).isEmpty();
+        } finally {
+            transactionTemplate.execute(s -> {
+                jdbcTemplate.update("DELETE FROM payment.player_subscriptions WHERE player_id = 175002");
+                jdbcTemplate.update("DELETE FROM main.player_profiles WHERE id = 175002");
+                jdbcTemplate.update("DELETE FROM main.\"user\" WHERE id = 175002");
+                return null;
+            });
+        }
+    }
+
     // ── RS07: the ungranted-upgrade record cannot be rolled back with the failed request ──
 
     @Test
@@ -180,5 +313,43 @@ class PackPurchaseAttemptIT extends BasePaymentIT {
         Integer count = jdbcTemplate.queryForObject(
             "SELECT count(*) FROM payment.subscription_upgrade_reconciliations WHERE stripe_subscription_id = 'sub_it169_d'", Integer.class);
         assertThat(count).isEqualTo(1);
+    }
+
+    // skillars-deferred-175 AC3: a retried failure adds no row while one is open; a resolved one does not block a new record
+    @Test
+    void anUngrantedUpgrade_recordedTwiceForOneInvoiceWhileOpen_isOneRow_butEachBilledInvoiceGetsItsOwn() {
+        recorder.recordUngrantedUpgrade("COACH", "coach-1", "sub_it169_e", "ACADEMY", "in_1");
+        recorder.recordUngrantedUpgrade("COACH", "coach-1", "sub_it169_e", "ACADEMY", "in_1");
+        assertThat(upgradeRows("sub_it169_e")).isEqualTo(1);
+
+        recorder.recordUngrantedUpgrade("COACH", "coach-1", "sub_it169_e", "ACADEMY", "in_2");
+        recorder.recordUngrantedUpgrade("COACH", "coach-1", "sub_it169_e", "INSTRUCTOR", "in_3");
+        recorder.recordUngrantedUpgrade("COACH", "coach-1", "sub_it169_e", "ACADEMY", null);
+        recorder.recordUngrantedUpgrade("COACH", "coach-1", "sub_it169_e", "ACADEMY", null);
+        assertThat(upgradeRows("sub_it169_e")).isEqualTo(4);
+
+        transactionTemplate.execute(s -> jdbcTemplate.update(
+            "UPDATE payment.subscription_upgrade_reconciliations SET resolved_at = now() WHERE stripe_subscription_id = 'sub_it169_e'"));
+        recorder.recordUngrantedUpgrade("COACH", "coach-1", "sub_it169_e", "ACADEMY", "in_1");
+
+        assertThat(upgradeRows("sub_it169_e")).isEqualTo(5);
+    }
+
+    // skillars-deferred-176 AC5 (RS07c): a granted retry resolves the open rows of that subscription's target tier only
+    @Test
+    void aGrantedUpgrade_resolvesTheOpenRowsOfItsTargetTier_only() {
+        recorder.recordUngrantedUpgrade("COACH", "coach-1", "sub_it169_r176", "ACADEMY", "in_1");
+        recorder.recordUngrantedUpgrade("COACH", "coach-1", "sub_it169_r176", "INSTRUCTOR", "in_2");
+
+        recorder.resolveUngrantedUpgrades("sub_it169_r176", "ACADEMY");
+
+        assertThat(jdbcTemplate.queryForList(
+            "SELECT target_tier FROM payment.subscription_upgrade_reconciliations WHERE stripe_subscription_id = ? "
+                + "AND resolved_at IS NULL", String.class, "sub_it169_r176")).containsExactly("INSTRUCTOR");
+    }
+
+    private int upgradeRows(String subId) {
+        return jdbcTemplate.queryForObject(
+            "SELECT count(*) FROM payment.subscription_upgrade_reconciliations WHERE stripe_subscription_id = ?", Integer.class, subId);
     }
 }

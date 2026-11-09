@@ -355,6 +355,7 @@ public class MessagingService {
             .orElseThrow(() -> new ResourceNotFoundException("Conversation not found", "conversation"));
 
         verifyIsParty(conv, callerUserId, role);
+        requireParentReadAccess(conv, role);
 
         Page<Message> page = messageRepository.findByConversationIdAndNotDeleted(conversationId, pageable);
 
@@ -483,6 +484,7 @@ public class MessagingService {
         var conv = conversationRepository.findById(conversationId)
             .orElseThrow(() -> new ResourceNotFoundException("Conversation not found", "conversation"));
         verifyIsParty(conv, callerUserId, role);
+        requireParentReadAccess(conv, role);
         return conv;
     }
 
@@ -517,14 +519,15 @@ public class MessagingService {
     }
 
     /**
-     * A parent stays the conversation's parentId after the player turns 18, but loses access with the
-     * age tier (privacy at 18): the own list and the oversight view already leave such threads out, and
-     * sending is refused. The summary by id is refused the same way (its preview quotes the latest
-     * message). getMessages and the SSE stream do not apply this yet: they check verifyIsParty only.
+     * A thread keeps the parent's id after the player turns 18, so {@link #verifyIsParty} alone still
+     * admits them. Once the player is an adult the parent is out: the lists, oversight and sending
+     * already refuse them, and reading by id (history, live stream) must too.
      */
     private void requireParentReadAccess(Conversation conv, String role) {
-        if ("PARENT".equals(role)
-                && AgeMessagingPolicy.from(agePolicyService.getMessagingPolicy(conv.getPlayerId())).parentIsBlocked()) {
+        // findMessagingPolicy: a thread whose player profile row is gone has no adult to protect, and a
+        // missing row must not cost the parent the thread (nor a report) with a not-found error.
+        if ("PARENT".equals(role) && agePolicyService.findMessagingPolicy(conv.getPlayerId())
+                .map(p -> AgeMessagingPolicy.from(p).parentIsBlocked()).orElse(false)) {
             throw new OperationNotAllowedException(
                 "Parental access does not apply to an adult player's conversations",
                 MessagingErrorCode.PARENTAL_OVERSIGHT_NOT_APPLICABLE);

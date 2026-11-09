@@ -14,6 +14,16 @@ public interface ClaimsExtractor {
     Long extractDbRefreshToken(HttpServletRequest request);
     Long extractSessionIssuedAt(HttpServletRequest request);
     UUID extractRefreshSessionId(HttpServletRequest request);
+
+    /*
+     * skillars-deferred-179: the same four readers over claims already parsed, so a caller that needs several of them
+     * (JwtManagerImpl.extendTtlOfToken) verifies the JWT once instead of once per claim. The request-based readers above
+     * parse and delegate to these.
+     */
+    Principal principalFrom(io.jsonwebtoken.Claims claims);
+    Long dbRefreshTokenFrom(io.jsonwebtoken.Claims claims);
+    Long sessionIssuedAtFrom(io.jsonwebtoken.Claims claims);
+    UUID refreshSessionIdFrom(io.jsonwebtoken.Claims claims);
     String extractUserNameSilently(HttpServletRequest request);
     Optional<String> extractSessionIdSilently(HttpServletRequest request);
     java.util.Set<org.springframework.security.core.authority.SimpleGrantedAuthority> getRoles(io.jsonwebtoken.Claims claims);

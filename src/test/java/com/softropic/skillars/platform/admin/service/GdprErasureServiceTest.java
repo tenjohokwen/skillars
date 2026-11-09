@@ -100,6 +100,7 @@ class GdprErasureServiceTest {
     @Mock private GdprRequestRepository gdprRequestRepository;
     @Mock private AdminAlertRepository adminAlertRepository;
     @Mock private UserRepository userRepository;
+    @Mock private com.softropic.skillars.platform.security.repo.EmailChangeRequestRepository emailChangeRequestRepository;
     @Mock private CoachProfileRepository coachProfileRepository;
     @Mock private PlayerProfileRepository playerProfileRepository;
     @Mock private BookingRepository bookingRepository;
@@ -161,7 +162,8 @@ class GdprErasureServiceTest {
         lenient().when(configService.getBoundedLong(any(ConfigBounds.BoundedKey.class))).thenReturn(5L);
 
         service = new GdprErasureService(
-            gdprRequestRepository, adminAlertRepository, userRepository, coachProfileRepository,
+            gdprRequestRepository, adminAlertRepository, userRepository, emailChangeRequestRepository,
+            coachProfileRepository,
             playerProfileRepository, bookingRepository, sessionCompletionDataRepository,
             coachAvailabilityBlockRepository, messageRepository, coachReviewRepository,
             userIdentitySignalService, sluRepository, sluWeeklySnapshotRepository, playerSluWeeklySnapshotAppliedRepository,

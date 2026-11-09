@@ -1,12 +1,14 @@
 package com.softropic.skillars.platform.payment.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.softropic.skillars.platform.payment.repo.StripeCustomerRepository;
 import com.stripe.exception.ApiConnectionException;
 import com.stripe.exception.InvalidRequestException;
 import com.stripe.model.Customer;
 import com.stripe.model.PaymentMethod;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.InOrder;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
@@ -16,6 +18,7 @@ import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -28,9 +31,10 @@ class StripeCustomerErasureOutboxHandlerTest {
     private static final String PAYLOAD = "{\"stripeCustomerId\":\"cus_123\"}";
 
     @Mock StripeClient stripeClient;
+    @Mock StripeCustomerRepository stripeCustomerRepository;
 
     private StripeCustomerErasureOutboxHandler handler() {
-        return new StripeCustomerErasureOutboxHandler(stripeClient, new ObjectMapper());
+        return new StripeCustomerErasureOutboxHandler(stripeClient, stripeCustomerRepository, new ObjectMapper());
     }
 
     private static PaymentMethod pm(String id) {
@@ -58,6 +62,26 @@ class StripeCustomerErasureOutboxHandlerTest {
         verify(stripeClient).detachPaymentMethod("pm_b");
         verify(stripeClient).deleteCustomer(CUS);
         verify(stripeClient, never()).scrubCustomer(anyString());
+    }
+
+    // skillars-deferred-176 AC1 (RS03f): the lock shared with the email sync comes before any Stripe call.
+    @Test
+    void takesTheCustomerOutboxLock_beforeTouchingStripe() throws Exception {
+        liveCustomerWithTwoCards();
+
+        handler().handle(PAYLOAD);
+
+        InOrder order = inOrder(stripeCustomerRepository, stripeClient);
+        order.verify(stripeCustomerRepository).acquireCustomerOutboxLock(CUS);
+        order.verify(stripeClient).retrieveCustomer(CUS);
+    }
+
+    @Test
+    void aBlankCustomerId_isANoOp_andTakesNoLock() throws Exception {
+        handler().handle("{\"stripeCustomerId\":\" \"}");
+
+        verify(stripeCustomerRepository, never()).acquireCustomerOutboxLock(anyString());
+        verify(stripeClient, never()).retrieveCustomer(anyString());
     }
 
     @Test

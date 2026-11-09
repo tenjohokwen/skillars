@@ -159,7 +159,7 @@ needs an owner decision or a code or doc fix before PROD serves real users.
   `platform_config` row is blank, V139 seeds it blank, and the admin API that edits it needs a bootstrapped admin who cannot exist before
   the first successful boot. Workaround: set the row by SQL after Flyway has run (or boot once with `ALLOW_UNSCANNED_MEDIA=true`), see
   `runbook.md` "Admin alert recipient". A code fix (seed or env-supplied address) would remove the trap **(owner decision)**.
-- [ ] **Recent migrations assume "prod is not live".** V186, V192, V193, V195, V198, V199, V200, V205, V206, V208, V209, V210, V212, V213, V214, V215, V219, V221, V223, V224, V226, V229 and V230 use
+- [ ] **Recent migrations assume "prod is not live".** V186, V192, V193, V195, V198, V199, V200, V205, V206, V208, V209, V210, V212, V213, V214, V215, V219, V221, V223, V224, V226, V229, V230, V231 and V232 use
   validating `CHECK` swaps, non-concurrent unique indexes or a same-release column + first write,
   justified in their headers by "no production deployment exists yet" (V226: an irreversible discard; V229 and V230:
   a drop in the same release as its last reader's removal, not the release after). Once PROD holds real data,
@@ -192,6 +192,17 @@ needs an owner decision or a code or doc fix before PROD serves real users.
   would fail with "column does not exist" during the migration window. Owner decision: allowed because PROD has never
   been deployed. If PROD is live by then, hold V230 back a release. The legacy voice-note text in the column is gone
   after this deploy (that is the point; nothing reads it).
+- [ ] **V231 makes account identity case-insensitive** (skillars-deferred-172). It lowercases `main."user".email` and
+  `login` and adds unique indexes on `lower(email)` and `lower(login)`. If two accounts differ only by letter case it
+  stops the deploy with an error naming them: run the V231 check in 3.2 first and settle any pair with the owner
+  (merging accounts is never automatic). The rows it lowercases are accounts that could not sign in before.
+- [ ] **V232 adds `main.email_change_requests` with its code** (skillars-deferred-172), and widens the
+  `envelope_entity` template CHECK with `EMAIL_CHANGED_NOTICE` and `EMAIL_CHANGE_ADDRESS_IN_USE`. An email change now
+  takes effect only from the link mailed to the new address, and the old address gets a 7-day undo link. Two new
+  public endpoints (`/api/email-change/confirm`, `/api/email-change/undo`) and SPA routes
+  (`/#/email-change/confirm`, `/#/email-change/undo`): no proxy or firewall rule needed beyond the existing `/api`
+  and SPA ones. **After the deploy (UAT):** change a test account's email end to end (request, confirm link, undo
+  link) and check the three mails arrive.
 
 ---
 
@@ -470,6 +481,18 @@ The strongest gate is a rehearsal: restore the latest dump into a scratch Postgr
 `src/main/resources/db/migration` from the target commit) at it, and let it migrate. Any CHECK or
 unique index that fails will fail there first **(confirm procedure)**.
 
+**V231: one account per address, whatever its casing** (`V231__user_email_login_case_insensitive.sql`)
+```sql
+SELECT 'email' AS col, lower(email) AS value, count(*) FROM main."user" GROUP BY lower(email) HAVING count(*) > 1
+UNION ALL
+SELECT 'login', lower(login), count(*) FROM main."user" GROUP BY lower(login) HAVING count(*) > 1;
+-- non-zero: two accounts differ only by letter case. Decide with the owner which one keeps the address
+-- (the other gets a different address or is erased) before deploying; the migration refuses to merge them.
+```
+
+**V232: email change requests** (`V232__email_change_requests.sql`). A new empty table and a CHECK widening (the
+new list is a superset). Nothing to check before it runs.
+
 **V195: `uq_spp_stripe_payment_intent_id`** (partial unique index, `V195__session_pack_integrity.sql`)
 ```sql
 SELECT stripe_payment_intent_id, count(*)
@@ -741,15 +764,14 @@ self-referential FK V224 shipped `NOT VALID` is validated. Nothing to configure,
       is signed out mid-task and must log in again. Three attempts to remove the cap were made and
       withdrawn during that story (the third broke logout outright); the real fix is frontend rotation,
       filed as its own story in `deferred-work.md`. Tell support before this ships.
-- [ ] **Accepted gap, and it does NOT self-clear: JWTs minted before this deploy are never checked.** They
-      carry no `rtsid` claim and the filter deliberately fails open for them, because failing closed would
-      sign every live session out at deploy. A claimless token presented WITH its `rtkn` cookie is
-      repaired — the filter re-derives the chain id from that cookie, owner-scoped — so the exposed
-      population is narrower than it first appears: a holder presenting a claimless `potc` WITHOUT the
-      matching cookie, which is precisely a thief who copied only that cookie. For them the session stays
-      alive as long as they keep making requests, and waiting 7 days does not close it. The flip to fail-closed needs a deliberate
-      trigger (a forced re-login, or accepting that remaining claimless holders are signed out at the
-      flip); tracked as an owner decision in `deferred-work.md`.
+- [x] **Closed by skillars-deferred-180: a JWT with no `rtsid` claim is now refused** on its next DB-reauth
+      cycle (within 5 min) unless the request's own `rtkn` lets the filter re-derive the chain id. Shipped
+      before go-live, so only UAT sessions older than V225 whose chain never rotated are signed out (once).
+- [ ] **Before shipping any client that calls `POST /api/auth/refresh` (a mobile app, an API client):**
+      revisit two residuals in `deferred-work.md`. `MAX_GRACE_HOPS`: a stale refresh cookie more than 8
+      rotations behind a live chain is treated as reuse and signs the account out of every device. And the
+      refresh rate limit is per IP (5 a minute), so anyone behind the same NAT can drain it and block
+      everyone else's rotation there. The SPA never rotates, so nothing reaches either today.
 - [ ] **Narrowed detection, and a changed blast radius.** A used refresh token presented against a chain
       that is still live, more than 30 s after its rotation, now answers `401` and revokes **that chain
       only**, where it used to revoke every chain on the account and bump the session epoch. The change
@@ -897,7 +919,9 @@ logged at DEBUG and acknowledged):
     to credit), refuse cash-out while the dispute is open, restore the credit on a won dispute, and
     cut or cancel the payout of a session that completes after a lost one. No new event types.
   - `charge.refunded` covers refunds made in the Dashboard (raises an `EXTERNAL_REFUND` admin
-    alert).
+    alert). Operators: a full refund of a pack charge revokes the pack's remaining sessions; a partial
+    one leaves the pack whole (owner decision 2026-11-08: partial = goodwill). To take sessions back,
+    refund in full.
   - `account.updated` (Connect endpoint) is the primary path that marks a coach's Connect account
     `COMPLETE` or `RESTRICTED` (and records the `transfers` capability that gates payouts). The
     fallback reads the account from Stripe when the coach returns from OAuth and, at most every
@@ -1148,7 +1172,7 @@ Detail: [`scheduler-lock-tuning.md`](scheduler-lock-tuning.md), `docs/dev-docs/s
 | `CoachStartReminderScheduler` | 1 min | hard-coded; ShedLock `CoachStartReminderScheduler_remind` (`PT5M` / `PT30S`). Emails the coach (`COACH_START_REMINDER`, plus an inbox row) at an unstarted session's start and at start + 10 min; needs working outbound email like every other booking mail |
 | `PaymentPendingSweeper` | 15 min | hard-coded |
 | `ChargeOutcomeReconciler` | 10 min | hard-coded cadence; age threshold `booking.payment.charge_reconcile_after_minutes` (10). Settles or declines booking charges whose Stripe response was lost; ERROR tags `[CHARGE_RECONCILE_AMOUNT_MISMATCH]` / `[CHARGE_RECONCILE_BOOKING_MOVED]` need an operator |
-| `PaymentRecoveryJob` | 5 min | hard-coded; ShedLock `PaymentRecoveryJob_run` (`PT10M` / `PT1M`). Four duties, each isolated: resolves open pack purchase attempts older than `payment.packAttempt.minAgeMinutes` from Stripe (it never refunds), purges terminal attempts past `payment.packAttempt.retentionDays`, drains parked subscription webhook events whose subscription is now linked, purges parked events past `payment.pendingSubscriptionEvent.retentionDays`. |
+| `PaymentRecoveryJob` | 5 min | hard-coded; ShedLock `PaymentRecoveryJob_run` (`PT10M` / `PT1M`). Four duties, each isolated: resolves open pack purchase attempts older than `payment.packAttempt.minAgeMinutes` from Stripe (it never refunds; it skips the rows it has marked `needs_operator_since`), purges terminal attempts past `payment.packAttempt.retentionDays`, drains parked subscription webhook events whose subscription is now linked, purges parked events past `payment.pendingSubscriptionEvent.retentionDays`. |
 | `CashOutReconciliationService` | 15 min | hard-coded |
 | `SessionPackForfeitureScheduler` | 60 min | hard-coded |
 | `SessionPackExpiryNotifier` | daily 08:00 | hard-coded |
@@ -1160,6 +1184,7 @@ Detail: [`scheduler-lock-tuning.md`](scheduler-lock-tuning.md), `docs/dev-docs/s
 | `SubscriptionTierReconciliationScheduler` | daily 04:00 | hard-coded |
 | `StripeSubscriptionReconciliationScheduler` | daily 05:00 | hard-coded |
 | `GdprErasureRetryScheduler` | daily 06:00 | hard-coded |
+| `StripeCustomerErasureSweep` | hourly at :17 | hard-coded; ShedLock `StripeCustomerErasureSweep_scheduleMissedErasures` (`PT15M` / `PT1M`). Enqueues the Stripe-side erasure (`STRIPE_CUSTOMER_ERASURE`) for each payer whose account carries the GDPR tombstone and whose `stripe_customers.erasure_scheduled_at` is NULL, at most 100 per run; WARN `[STRIPE_CUSTOMER_ERASURE_SCHEDULED_BY_SWEEP]`, ERROR `[STRIPE_CUSTOMER_ERASURE_SWEEP_FAILED]`. The first runs after V234 re-enqueue every earlier erasure once (idempotent at Stripe) |
 | `CoachStripeAccountResyncScheduler` | daily 07:00 | hard-coded; re-reads each connected `COMPLETE` Stripe account (`Account.retrieve`, 200 per page, at most 25 pages per run) and applies it like `account.updated` |
 | `StalePayoutAlertScheduler` | daily 06:30 | hard-coded cron; age threshold `payment.payout.stale_alert_days` (14). Alerts only (`PAYOUT_HELD` for FROZEN/HOLD payouts unchanged that long). Pages through every stale row (200 per page, at most 50 pages per run) |
 | `MessageRetentionScheduler` | daily 02:00 | hard-coded; deletes per `platform.message_retention_months` |
@@ -1247,6 +1272,7 @@ row: the coded default applies until an admin stores a value (`ConfigBounds.HAS_
 | `payment.packAttempt.minAgeMinutes` | 10 (code default, range 5–1440) | `ConfigBounds` | Keep. Age an open pack-purchase attempt must reach before a same-key replay or `PaymentRecoveryJob` resolves it from Stripe (a live request can run 6–8 min) |
 | `payment.packAttempt.absenceAgeMinutes` | 30 (code default, range 15–1440) | `ConfigBounds` | Keep. Age at which an EMPTY Stripe lookup counts as "no charge"; must exceed the worst-case life of a request thread, or a slow original request could capture after a second attempt started |
 | `payment.packAttempt.retentionDays` | 30 (code default, range 7–3650) | `ConfigBounds` | Keep. How long terminal pack-purchase attempts are kept |
+| `payment.packAttempt.operatorAfterMinutes` | 60 (code default, range 15–1440) | `ConfigBounds` | Keep. Age past which `PaymentRecoveryJob` stops retrying an attempt whose charge is unreadable or whose pack could not be recorded, and marks it for an operator (`[PACK_PURCHASE_ATTEMPT_NEEDS_OPERATOR]`); a deleted tier is marked at once |
 | `payment.pendingSubscriptionEvent.retentionDays` | 30 (code default, range 1–365) | `ConfigBounds` | Keep. How long a parked subscription webhook event that never linked is kept |
 | `booking.batch.maxSize` | 5 | V139 | Keep |
 | `reliability.strike.visibilityThreshold` / `suspensionThreshold` | 3 / 5 | V139 | Keep |
@@ -1582,3 +1608,33 @@ an operator must now do.
   `BACKUP_STORAGE_TYPE` / `S3_BACKUP_*` switch never existed in code); container memory limits sum to about 7.3 GiB; V216, V221 and V222 pre-migration entries; V221 and V223
   joined the "prod is not live" list; `MediaScanRetryScheduler` in the job table; `.env.example` lost the dead `APP_BOOTSTRAP_JWT_SECRET_ENABLED` and gained the `GEMINI_*`
   variables and the optional passthroughs. `deploy.yml` recreates `app` only, so a release that adds `.env` variables or changes compose needs the steps in `deploy-guide.md`.
+- 2026-11-05: skillars-deferred-172 (V231, V232): run the V231 case-collision check before deploying; email changes are
+  confirmed from the new address and can be undone from the old one for 7 days (two public endpoints and SPA routes,
+  three account mails).
+- 2026-11-06: skillars-deferred-174 (V233, additive nullable columns on `payment.session_pack_purchase_attempts`, runs
+  automatically). New admin endpoint `POST /api/admin/payment/pack-attempts/{id}/close` (full admin), which replaces the
+  `PackAttemptsUnresolved` runbook's hand-written `UPDATE`s. New code-default key `payment.packAttempt.operatorAfterMinutes`
+  (60) ([section 7](#7-application-config-and-policy-keys)). The MoneyIntegrityEvent alert also matches
+  `[PACK_PURCHASE_ATTEMPT_NEEDS_OPERATOR]` (recreate Grafana after pulling). `POST /api/payment/save-payment-method` now
+  saves only a card attached to the caller's own Stripe customer. No new job, webhook or env var.
+- 2026-11-07: skillars-deferred-175 (no migration). New high alert `ParkedSubscriptionEventsStuck` on the backlog gauge
+  `skillars_backlog_oldest_age_seconds{backlog="parked_events_linked"}` (recreate Grafana after pulling; the series is absent
+  while nothing is stuck, which is normal); the parked-event retention purge now keeps rows whose subscription is linked and
+  logs `[STRIPE_WEBHOOK_PARKED_LINKED_NOT_PURGED]`. `[SUBSCRIPTION_UPGRADE_UNGRANTED]` (MoneyIntegrityEvent) also fires when
+  recording an upgrade fails after Stripe upgraded. A confirmed or undone email change now updates the Stripe customer's
+  email through the outbox (`STRIPE_CUSTOMER_EMAIL_SYNC`). No new job, webhook, config key or env var.
+- 2026-11-08: skillars-deferred-177 (V234, one additive nullable column `payment.stripe_customers.erasure_scheduled_at`,
+  runs automatically, no pre-check). New hourly job `StripeCustomerErasureSweep` ([section 6](#6-scheduled-jobs-and-shedlock));
+  its first runs after the deploy re-enqueue the Stripe erasure of every account erased before it, 100 per hour, which
+  Stripe answers as a no-op for customers already deleted. A pack purchase or SetupIntent for a payer erased during the
+  request is refused (422 `payment.accountErased`). No new webhook, config key or env var.
+- 2026-11-08: skillars-deferred-178 (no migration). The MoneyIntegrityEvent alert also matches `[PACK_PURCHASE_LATE_CAPTURE]`
+  (recreate Grafana after pulling), and the Payments & Payouts "Mismatches and failures" panel shows it and
+  `[PACK_PURCHASE_ATTEMPT_CLOSED_BEFORE_CHARGE]`. The pack-attempt resolver now uses Stripe's PaymentIntent Search API as a
+  fallback (no setup needed; Search is unavailable in India). No new job, webhook, config key or env var.
+- 2026-11-08: skillars-deferred-180 (no migration). A JWT without the `rtsid` chain claim is refused unless its own `rtkn`
+  names a live chain (UAT sessions older than V225 may be signed out once). `POST /api/payment/session-packs/purchase` requires
+  `Idempotency-Key` (400 `payment.idempotencyKeyRequired`; the SPA already sends it). `POST /api/auth/refresh` is
+  rate-limited to 5 a minute per IP (logout deliberately is not). A partial Dashboard refund of a pack leaves the pack whole.
+  New checklist item: revisit `MAX_GRACE_HOPS` before shipping a client that calls `POST /api/auth/refresh`. No new job,
+  webhook, config key or env var.

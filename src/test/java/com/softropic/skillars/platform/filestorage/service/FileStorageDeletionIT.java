@@ -80,6 +80,30 @@ class FileStorageDeletionIT extends BaseStorageIT {
         fileStorageObjectRepository.deleteAll();
     }
 
+    // skillars-deferred-176 AC6 (RS03d): ownership is the owner id, not the login the file was uploaded under
+    @Test
+    void softDelete_isDecidedByTheOwnerId_notByTheLoginTheFileWasUploadedUnder() {
+        byte[] content = "%PDF-1.4 mine".getBytes();
+        SignUploadResponse mine = signAndPut("documents", "42", "application/pdf", "pdf", content);
+        confirmUpload(mine, content, "application/pdf");
+        SignUploadResponse theirs = signAndPut("documents", "43", "application/pdf", "pdf", content);
+        confirmUpload(theirs, content, "application/pdf");
+        transactionTemplate.execute(status -> {
+            // uploaded before an email change: created_by still holds the old login
+            em.createQuery("UPDATE FileStorageObject f SET f.createdBy = 'old.address@example.com' WHERE f.key = :key")
+                .setParameter("key", mine.key()).executeUpdate();
+            em.createQuery("UPDATE FileStorageObject f SET f.ownerId = '999' WHERE f.key = :key")
+                .setParameter("key", theirs.key()).executeUpdate();
+            return null;
+        });
+
+        fileStorageService.softDelete(mine.key());
+
+        assertThatThrownBy(() -> fileStorageService.signDownload(mine.key())).isInstanceOf(StorageObjectNotFoundException.class);
+        assertThatThrownBy(() -> fileStorageService.softDelete(theirs.key()))
+            .isInstanceOf(com.softropic.skillars.infrastructure.security.AuthorizationException.class);
+    }
+
     @Test
     void softDelete_makesFileImmediatelyInaccessible() {
         byte[] content = "%PDF-1.4 delete me".getBytes();
@@ -94,7 +118,7 @@ class FileStorageDeletionIT extends BaseStorageIT {
             return null;
         });
 
-        fileStorageService.softDelete(signResponse.key(), "test-user");
+        fileStorageService.softDelete(signResponse.key());
 
         assertThatThrownBy(() -> fileStorageService.signDownload(signResponse.key()))
             .isInstanceOf(StorageObjectNotFoundException.class);
@@ -114,7 +138,7 @@ class FileStorageDeletionIT extends BaseStorageIT {
             return null;
         });
 
-        fileStorageService.softDelete(signResponse.key(), "test-user");
+        fileStorageService.softDelete(signResponse.key());
         deletionSchedulerService.processDeletions();
 
         assertThat(fileStorageObjectRepository.findByKey(signResponse.key()))
@@ -137,7 +161,7 @@ class FileStorageDeletionIT extends BaseStorageIT {
             return null;
         });
 
-        fileStorageService.softDelete(signResponse.key(), "test-user");
+        fileStorageService.softDelete(signResponse.key());
         backdateDeletedAt(signResponse.key(), storageProperties.getDeletion().getRetentionDays() + 1);
 
         storageProperties.getReplication().setEnabled(true);
@@ -191,7 +215,7 @@ class FileStorageDeletionIT extends BaseStorageIT {
             return null;
         });
 
-        fileStorageService.softDelete(signResponse.key(), "test-user");
+        fileStorageService.softDelete(signResponse.key());
         backdateDeletedAt(signResponse.key(), storageProperties.getDeletion().getRetentionDays() + 1);
 
         CountDownLatch startGate = new CountDownLatch(1);
@@ -241,7 +265,7 @@ class FileStorageDeletionIT extends BaseStorageIT {
             return null;
         });
 
-        fileStorageService.softDelete(signResponse.key(), "test-user");
+        fileStorageService.softDelete(signResponse.key());
         backdateDeletedAt(signResponse.key(), storageProperties.getDeletion().getRetentionDays() + 1);
 
         deletionSchedulerService.processDeletions();
@@ -266,7 +290,7 @@ class FileStorageDeletionIT extends BaseStorageIT {
 
     @Test
     void softDelete_nonExistentKey_throwsNotFoundException() {
-        assertThatThrownBy(() -> fileStorageService.softDelete("nonexistent/key/file.pdf", "test-user"))
+        assertThatThrownBy(() -> fileStorageService.softDelete("nonexistent/key/file.pdf"))
             .isInstanceOf(StorageObjectNotFoundException.class);
     }
 

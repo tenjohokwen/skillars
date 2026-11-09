@@ -70,9 +70,9 @@ public class RefreshTokenRevocationService {
      *
      * <p>Rejects a {@code null} id by returning {@code true} — "cannot tell, so do not block". A null
      * {@code session_id} matches no row, so asking the database would answer "nothing live" for every
-     * pre-V225 session and log those users out, which is the precise opposite of AC5's deliberate
-     * fail-open. The filter also checks for null before calling, so this is defence in depth, not the
-     * primary guard.
+     * pre-V225 session and log those users out as a side effect of a lookup. Refusing an unresolvable id is
+     * a decision the filter makes explicitly instead (skillars-deferred-180), before it calls this, so the
+     * filter never reaches this branch.
      */
     @Transactional(readOnly = true, propagation = Propagation.SUPPORTS)
     public boolean hasLiveTokenForSession(final UUID refreshSessionId, final Long userId) {
@@ -88,7 +88,7 @@ public class RefreshTokenRevocationService {
      * rolling deploy stripped. See
      * {@link RefreshTokenRepository#findSessionIdByTokenHashAndUserId(String, Long)} for why that state
      * exists and why the lookup is owner-scoped. Returns {@code null} whenever it cannot answer, which the
-     * caller treats as "no claim" — the same deliberate fail-open as a token that never had one.
+     * caller treats as "no claim": the filter then refuses the token (skillars-deferred-180).
      */
     @Transactional(readOnly = true, propagation = Propagation.SUPPORTS)
     public UUID sessionIdForTokenHash(final String tokenHash, final Long userId) {

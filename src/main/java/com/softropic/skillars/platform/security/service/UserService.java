@@ -1,5 +1,7 @@
 package com.softropic.skillars.platform.security.service;
 
+import org.apache.commons.lang3.StringUtils;
+import java.util.Locale;
 import com.softropic.skillars.platform.security.contract.Consumer;
 import com.softropic.skillars.infrastructure.security.SecurityConstants;
 import com.softropic.skillars.platform.security.contract.exception.UserNotFoundException;
@@ -40,7 +42,7 @@ public class UserService {
     @Transactional(readOnly = true)
     @PreAuthorize(SecurityConstants.HAS_ANY_ROLE)
     public Optional<User> findUserWithAuthoritiesByLogin(final String login) {
-        return userRepository.findOneByLogin(login);
+        return userRepository.findOneByLogin(StringUtils.lowerCase(login, Locale.ROOT));
     }
 
     @Transactional(readOnly = true)
@@ -72,12 +74,14 @@ public class UserService {
     @Transactional(readOnly = true)
     @PreAuthorize(SecurityConstants.HAS_ANY_ROLE)
     public Optional<User> findUserByEmail(final String email) {
-        return userRepository.findOneByEmail(email);
+        // skillars-deferred-172: addresses are stored lowercased (V231); match what the user typed in any casing.
+        return userRepository.findOneByEmail(StringUtils.lowerCase(email, Locale.ROOT));
     }
 
     @Transactional(readOnly = true)
     public Optional<User> findUserByLogin(String login) {
-        return userRepository.findOneByLogin(login);
+        // skillars-deferred-172: addresses are stored lowercased (V231); match what the user typed in any casing.
+        return userRepository.findOneByLogin(StringUtils.lowerCase(login, Locale.ROOT));
     }
 
     @Transactional(readOnly = true)

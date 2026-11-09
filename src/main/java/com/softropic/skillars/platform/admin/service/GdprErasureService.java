@@ -50,6 +50,7 @@ import com.softropic.skillars.platform.security.repo.PlayerProfile;
 import com.softropic.skillars.platform.security.repo.PlayerProfileRepository;
 import com.softropic.skillars.platform.security.repo.RefreshTokenRepository;
 import com.softropic.skillars.platform.security.repo.User;
+import com.softropic.skillars.platform.security.repo.EmailChangeRequestRepository;
 import com.softropic.skillars.platform.security.repo.UserRepository;
 import com.softropic.skillars.platform.security.service.AgeVerificationService;
 import com.zaxxer.hikari.HikariDataSource;
@@ -98,6 +99,7 @@ public class GdprErasureService {
     private final GdprRequestRepository gdprRequestRepository;
     private final AdminAlertRepository adminAlertRepository;
     private final UserRepository userRepository;
+    private final EmailChangeRequestRepository emailChangeRequestRepository;
     private final CoachProfileRepository coachProfileRepository;
     private final PlayerProfileRepository playerProfileRepository;
     private final BookingRepository bookingRepository;
@@ -435,6 +437,10 @@ public class GdprErasureService {
         // feat/security-s06-related-party: the hashed email / phone / card / browser identifiers recorded for this
         // user (main.user_identity_signals). The related-party flags keep only ids, which no longer identify anyone.
         userIdentitySignalService.eraseForUser(userId);
+
+        // skillars-deferred-172 (R2): pending and past email changes hold the person's real addresses, an open
+        // confirm link would write one back over the tombstone, and a confirmed one keeps the old address reserved.
+        emailChangeRequestRepository.deleteAllByUserId(userId);
 
         // S-27: the Stripe Identity outcome rows (status, session id, verified tier) go with the account, and the
         // provider is asked to redact its copy after commit. No document data was ever stored here.

@@ -93,8 +93,10 @@ class SoftDeleteIT extends AbstractIntegrationTest {
             jdbcTemplate.update(
                 "INSERT INTO main.player_profiles " +
                 "(id, name, date_of_birth, position, age_tier, parent_id, independent_account_allowed, created_at, created_by) " +
-                "VALUES (?, 'SoftDelete Player', ?, 'DEFENDER', 'ADULT', ?, true, ?, 'system')",
-                PLAYER_ID, Date.valueOf(LocalDate.now().minusYears(18)),
+                "VALUES (?, 'SoftDelete Player', ?, 'DEFENDER', 'AGE_13_17', ?, false, ?, 'system')",
+                // 15 (supervised): the parent observes the thread. Once a player is an adult the parent
+                // can no longer read or report it, and these tests act as the parent.
+                PLAYER_ID, Date.valueOf(LocalDate.now().minusYears(15)),
                 PARENT_ID, Timestamp.from(Instant.now()));
 
             insertUser(COACH_USER_ID, COACH_EMAIL, passwordHash, "COACH");

@@ -420,10 +420,17 @@ class GdprErasureIT extends AbstractIntegrationTest {
 
         // The still-live JWT is honoured on the very next request: no HTTP round-trip reaches the DB
         // at all on this fast-path cycle, so the erasure that just happened is not yet visible.
-        ResponseEntity<Map> stillHonoured = httpTestClient.makeHttpRequest(
-            baseUrl() + ERASURE_URL, HttpMethod.POST, null,
-            authenticatedHeaders(cookiesBeforeErasure), Map.class);
+        // (Probed on a read endpoint: erasure itself re-checks the session in the DB since
+        // skillars-deferred-172, and refuses — see the next assertion.)
+        ResponseEntity<List> stillHonoured = httpTestClient.makeHttpRequest(
+            baseUrl() + "/api/gdpr/requests", HttpMethod.GET, null,
+            authenticatedHeaders(cookiesBeforeErasure), List.class);
         assertThat(stillHonoured.getStatusCode().is2xxSuccessful()).isTrue();
+        assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
+            baseUrl() + ERASURE_URL, HttpMethod.POST, null,
+            authenticatedHeaders(cookiesBeforeErasure), Map.class))
+            .isInstanceOfSatisfying(HttpClientErrorException.class,
+                e -> assertThat(e.getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED));
 
         // What the <=5 min bound actually depends on: once DB_REFRESH_TOKEN_INTERVAL elapses and the
         // DB re-auth path runs, daoAuthProvider.authorize re-loads the account and re-runs Spring

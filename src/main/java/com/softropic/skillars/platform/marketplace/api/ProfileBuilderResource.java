@@ -70,7 +70,7 @@ public class ProfileBuilderResource {
     @DeleteMapping("/photo")
     @PreAuthorize(SecurityConstants.HAS_COACH_ROLE)
     public ResponseEntity<Void> deletePhoto() {
-        coachProfileService.deletePhoto(currentUserId(), securityUtil.getCurrentUserName());
+        coachProfileService.deletePhoto(currentUserId());
         return ResponseEntity.noContent().build();
     }
 
@@ -93,7 +93,7 @@ public class ProfileBuilderResource {
     @DeleteMapping("/gallery/{mediaId}")
     @PreAuthorize(SecurityConstants.HAS_COACH_ROLE)
     public ResponseEntity<Void> deleteGalleryItem(@PathVariable UUID mediaId) {
-        coachGalleryService.deleteItem(currentUserId(), mediaId, securityUtil.getCurrentUserName());
+        coachGalleryService.deleteItem(currentUserId(), mediaId);
         return ResponseEntity.noContent().build();
     }
 

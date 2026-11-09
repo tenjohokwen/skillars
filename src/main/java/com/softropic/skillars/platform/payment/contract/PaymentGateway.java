@@ -27,6 +27,26 @@ public interface PaymentGateway {
     String chargeAndCapture(UUID referenceId, Long parentId, UUID coachId, BigDecimal amount, String idempotencyKey);
 
     /**
+     * skillars-deferred-174 AC3 (RS09d): {@link #chargeAndCapture(UUID, Long, UUID, BigDecimal, String)} charging
+     * {@code paymentMethodId} instead of the payer's saved card, so the card charged never depends on the mutable
+     * {@code stripe_customers} column. A null {@code paymentMethodId} charges the saved card. The caller has checked
+     * ownership ({@link #paymentMethodBelongsTo}); Stripe also refuses a card not attached to the customer.
+     */
+    String chargeAndCapture(UUID referenceId, Long parentId, UUID coachId, BigDecimal amount, String idempotencyKey,
+                            String paymentMethodId);
+
+    /**
+     * skillars-deferred-174 AC1 (RS09b): true iff Stripe reports {@code paymentMethodId} attached to
+     * {@code stripeCustomerId}. Our only attach path is the customer-scoped SetupIntent, so this proves the card was set
+     * up through this customer (not that it is chargeable today). False for a card of another customer, an unattached
+     * card, and an id Stripe rejects or does not know.
+     *
+     * @throws com.softropic.skillars.platform.payment.contract.exception.PaymentGatewayException when Stripe cannot be
+     *     asked (the caller fails closed)
+     */
+    boolean paymentMethodBelongsTo(String stripeCustomerId, String paymentMethodId);
+
+    /**
      * Creates a single platform-account charge for a batch of credit-based bookings (see
      * {@link #chargeAndCapture} — same B-1 model). Returns stripePaymentIntentId.
      *

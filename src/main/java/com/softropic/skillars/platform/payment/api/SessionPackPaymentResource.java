@@ -22,11 +22,13 @@ import com.softropic.skillars.platform.payment.repo.StripeCustomerRepository;
 import com.softropic.skillars.platform.payment.service.CoachSoldPackQueryService;
 import com.softropic.skillars.platform.payment.service.PackSessionService;
 import com.softropic.skillars.platform.payment.service.SessionPackPaymentService;
+import com.softropic.skillars.platform.payment.service.StripeCustomerEmailSyncOutboxSupport;
 import com.softropic.skillars.platform.payment.service.SubscriptionService;
 import com.softropic.skillars.platform.security.service.SecurityUtil;
 import io.micrometer.observation.annotation.Observed;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.http.HttpStatus;
@@ -41,12 +43,14 @@ import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.server.ResponseStatusException;
 
 import org.springframework.dao.DataIntegrityViolationException;
 
 import java.util.List;
 import java.util.UUID;
 
+@Slf4j
 @RestController
 @RequestMapping("/api/payment")
 @RequiredArgsConstructor
@@ -62,6 +66,7 @@ public class SessionPackPaymentResource {
     private final PaymentProperties paymentProperties;
     private final CoachSoldPackQueryService coachSoldPackQueryService;
     private final SubscriptionService subscriptionService;
+    private final StripeCustomerEmailSyncOutboxSupport stripeCustomerEmailSync;
 
     // ─── Parent: purchase a session pack ──────────────────────────────────────
 
@@ -69,13 +74,17 @@ public class SessionPackPaymentResource {
     @PreAuthorize(SecurityConstants.HAS_PARENT_OR_PLAYER_ROLE)
     public ResponseEntity<SessionPackPurchaseResponse> purchaseSessionPack(
             @Valid @RequestBody PurchaseSessionPackRequest request,
-            // fix/payment-session-pack-integrity: one key per purchase attempt, so a double-submit dedupes
-            // to the same charge and pack. Optional — the service generates one when absent.
+            // fix/payment-session-pack-integrity: one key per purchase attempt, so a double-submit or a retry after
+            // a lost response dedupes to the same charge and pack. Required since skillars-deferred-180 (RS06c): a
+            // keyless retry of a purchase whose response was lost would buy a second pack. Checked here rather than
+            // with required = true so a missing header answers our own error code, not Spring's generic 400.
             @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey) {
+        if (idempotencyKey == null || idempotencyKey.isBlank()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "payment.idempotencyKeyRequired");
+        }
         Long parentId = securityUtil.getCurrentCoachUserId();
         SessionPackPurchaseResponse response = sessionPackPaymentService.purchasePack(
-            parentId, request.packTierId(), request.playerId(), request.paymentMethodId(),
-            idempotencyKey == null || idempotencyKey.isBlank() ? null : idempotencyKey.strip());
+            parentId, request.packTierId(), request.playerId(), request.paymentMethodId(), idempotencyKey.strip());
         return ResponseEntity.status(HttpStatus.CREATED).body(response);
     }
 
@@ -171,17 +180,32 @@ public class SessionPackPaymentResource {
     @PreAuthorize(SecurityConstants.HAS_PARENT_PLAYER_OR_COACH_ROLE)
     public ResponseEntity<SetupIntentResponse> createSetupIntent() {
         Long parentId = securityUtil.getCurrentCoachUserId();
+        // skillars-deferred-177 (RS03h): no SetupIntent for a payer erased while the request ran.
         StripeCustomer customer = stripeCustomerRepository.findById(parentId)
+            .map(existing -> {
+                sessionPackPaymentService.requirePayerLive(parentId);
+                return existing;
+            })
             .orElseGet(() -> {
+                String emailBefore = stripeCustomerEmailSync.currentEmail(parentId);
                 String stripeCustomerId = paymentGateway.createStripeCustomer(parentId);
                 StripeCustomer sc = new StripeCustomer();
                 sc.setParentId(parentId);
                 sc.setStripeCustomerId(stripeCustomerId);
-                try {
-                    return stripeCustomerRepository.save(sc);
-                } catch (DataIntegrityViolationException e) {
+                // Insert-only (177 review round 4): save() merges and would overwrite a row a concurrent request committed.
+                if (stripeCustomerRepository.insertIfAbsent(parentId, stripeCustomerId, null) == 0) {
+                    // A concurrent first request saved the row; it is an existing customer now (177 review round 1), and the
+                    // customer this request created is named by no row, so it is erased at Stripe (review round 3).
+                    sessionPackPaymentService.discardUnrecordedCustomer(stripeCustomerId);
+                    sessionPackPaymentService.requirePayerLive(parentId);
                     return stripeCustomerRepository.findById(parentId).orElseThrow();
                 }
+                StripeCustomer saved = sc;
+                // skillars-deferred-176 AC2: an email change that committed while the customer was created enqueued no sync.
+                if (stripeCustomerEmailSync.syncIfEmailChangedSince(parentId, emailBefore)) {
+                    throw SessionPackPaymentService.erasedPayer(parentId);
+                }
+                return saved;
             });
         String clientSecret = paymentGateway.createSetupIntent(customer.getStripeCustomerId());
         return ResponseEntity.ok(new SetupIntentResponse(clientSecret));
@@ -191,18 +215,14 @@ public class SessionPackPaymentResource {
     @PreAuthorize(SecurityConstants.HAS_PARENT_PLAYER_OR_COACH_ROLE)
     public ResponseEntity<Void> savePaymentMethod(@Valid @RequestBody SavedPaymentMethodRequest request) {
         Long parentId = securityUtil.getCurrentCoachUserId();
-        if (stripeCustomerRepository.findById(parentId).isEmpty()) {
-            // The Stripe customer is created outside any transaction (it is a Stripe call); a concurrent
-            // request that inserted the row first wins and its customer is kept.
-            StripeCustomer sc = new StripeCustomer();
-            sc.setParentId(parentId);
-            sc.setStripeCustomerId(paymentGateway.createStripeCustomer(parentId));
-            sc.setStripePaymentMethodId(request.paymentMethodId());
-            try {
-                stripeCustomerRepository.save(sc);
-            } catch (DataIntegrityViolationException e) {
-                // Created concurrently by another request; the update below sets the card on that row.
-            }
+        // skillars-deferred-174 AC1 (RS09b): only a card Stripe reports attached to the caller's own customer is saved.
+        // The card form always creates that customer first (POST /setup-intent), so a caller without one cannot own the
+        // card. Checked before the save's transaction (it is a Stripe call); a Stripe failure answers 422 and saves nothing.
+        StripeCustomer customer = stripeCustomerRepository.findById(parentId).orElse(null);
+        if (customer == null
+                || !paymentGateway.paymentMethodBelongsTo(customer.getStripeCustomerId(), request.paymentMethodId())) {
+            log.warn("[PAYMENT_METHOD_NOT_OWNED] userId={} hasCustomer={} — card not saved", parentId, customer != null);
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "payment.paymentMethodNotOwned");
         }
         // fix/payment-subscription-resume-and-async-sync: saves the card and, atomically with it, enqueues
         // the move of the caller's live subscriptions onto it (default payment method, past-due invoice

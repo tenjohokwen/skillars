@@ -19,6 +19,8 @@ public class AccountChangeEvent {
     public enum Action {
         PASSWORD_CHANGED,
         EMAIL_CHANGED,
+        // skillars-deferred-172: a confirmed email change reverted from the undo link mailed to the old address.
+        EMAIL_CHANGE_UNDONE,
         ADDRESS_CHANGED,
         PHONE_CHANGED,
         PAYOUT_ACCOUNT_CHANGED,

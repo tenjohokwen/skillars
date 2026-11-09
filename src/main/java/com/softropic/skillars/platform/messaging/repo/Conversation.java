@@ -10,6 +10,7 @@ import jakarta.persistence.Table;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
+import org.hibernate.annotations.DynamicUpdate;
 
 import java.time.Instant;
 import java.util.UUID;
@@ -19,6 +20,11 @@ import java.util.UUID;
 @NoArgsConstructor
 @Entity
 @Table(name = "conversations", schema = "messaging")
+// skillars-deferred-173 (RS10): no @Version, and readers, senders, reporters and the admin unblock all load and
+// save this row unlocked. A static full-row UPDATE wrote back whatever that transaction had loaded, so a
+// getMessages that loaded ACTIVE and committed after a report undid the BLOCKED. With @DynamicUpdate a save
+// writes only the columns that transaction changed (same fix as User).
+@DynamicUpdate
 public class Conversation extends BaseEntity {
 
     @Column(name = "coach_id", nullable = false)

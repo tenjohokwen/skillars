@@ -19,12 +19,11 @@ import java.util.Optional;
  * producer holding a differently-cased copy of the address used to find no user — no inbox row, the
  * opt-out ignored at send time, no unsubscribe link. Step 1 is the exact match on the
  * {@code user_email_key} UNIQUE index (every producer that reads the address off the user row hits it).
- * Only on a miss, step 2 compares {@code lower(email)}; there is no index on {@code lower(email)} (no
- * online-safe way to build one in this Flyway runner yet — migration-conventions.md rule 4), so it is a
- * scan of {@code main."user"}, paid only for addresses that matched nothing exactly. Two accounts whose
- * addresses differ only by case are still distinct under the unique constraint; if the lower-cased
- * address matches more than one user the lookup is ambiguous and returns empty — the same answer as
- * "no account", never someone else's inbox.
+ * Only on a miss, step 2 compares {@code lower(email)} (served by V231's {@code ux_user_email_lower}).
+ * Since skillars-deferred-172 every write stores the address lowercased and V231 makes {@code lower(email)}
+ * unique, so step 2 matters only for a producer holding a differently-cased copy; the ambiguous branch
+ * (more than one user) is kept as a guard and still answers empty — the same answer as "no account",
+ * never someone else's inbox.
   */
 @Repository
 @RequiredArgsConstructor

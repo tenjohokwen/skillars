@@ -114,8 +114,8 @@
                 color="primary"
                 :label="t('common.save')"
                 :loading="saving"
-                @click="onSaveWindow"
                 data-testid="availability-window-save"
+                @click="onSaveWindow"
               />
               <q-btn
                 v-if="editingWindow"

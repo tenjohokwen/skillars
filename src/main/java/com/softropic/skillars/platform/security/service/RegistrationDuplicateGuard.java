@@ -3,6 +3,8 @@ package com.softropic.skillars.platform.security.service;
 import com.softropic.skillars.infrastructure.security.RateLimitingService;
 import com.softropic.skillars.platform.security.contract.event.RegistrationDuplicateAttemptEvent;
 import com.softropic.skillars.platform.security.contract.event.RegistrationPhoneInUseEvent;
+import com.softropic.skillars.platform.security.contract.event.ReservedAddressAttemptEvent;
+import com.softropic.skillars.infrastructure.util.ClockProvider;
 import com.softropic.skillars.platform.security.repo.User;
 import com.softropic.skillars.platform.security.repo.UserRepository;
 import org.slf4j.Logger;
@@ -10,6 +12,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.security.crypto.password.PasswordEncoder;
 
+import java.time.Instant;
 import java.util.Locale;
 import java.util.Optional;
 import java.util.concurrent.TimeUnit;
@@ -68,14 +71,24 @@ final class RegistrationDuplicateGuard {
      * @param langKey the registration request's language; blank falls back to {@code "en"}, as the
      *     create path does. Used only for the phone-in-use mail to the typed address.
      */
-    static boolean handledAsDuplicate(UserRepository userRepository, PasswordEncoder passwordEncoder,
+    static boolean handledAsDuplicate(UserRepository userRepository, EmailAddressAvailability availability,
+                                      PasswordEncoder passwordEncoder,
                                       ApplicationEventPublisher publisher, RateLimitingService rateLimitingService,
                                       String flow,
                                       String email, String phone, String rawPassword, String langKey) {
         String reason = "email";
-        // login too: the legacy facade stored login as typed and email lowercased, and the new row's
-        // login (= email) would hit user_login_key, an error only an existing account produces.
-        Optional<User> existing = userRepository.findOneByEmail(email).or(() -> userRepository.findOneByLogin(email));
+        // skillars-deferred-172: the shared, case-insensitive answer (email or login of an account, or the old
+        // address of a recent email change still inside its undo window).
+        Optional<EmailAddressAvailability.Holder> holder =
+            availability.holderOf(email, null, Instant.now(ClockProvider.getClock()));
+        if (holder.isPresent() && holder.get().reserved()) {
+            passwordEncoder.encode(rawPassword); // same timing as the create path, as below
+            log.info("[REGISTRATION_DUPLICATE_ATTEMPT] registration matched a reserved address",
+                kv("flow", flow), kv("reason", "reserved"), kv("userId", holder.get().user().getId()));
+            notifyReservingAccount(publisher, rateLimitingService, holder.get());
+            return true;
+        }
+        Optional<User> existing = holder.map(EmailAddressAvailability.Holder::user);
         if (existing.isEmpty() && phone != null && !phone.isBlank()) {
             reason = "phone";
             existing = userRepository.findOneByPhoneNumber(phone);
@@ -119,6 +132,22 @@ final class RegistrationDuplicateGuard {
         }
         publisher.publishEvent(new RegistrationDuplicateAttemptEvent(
             user.getId(), user.getEmail(), user.getFirstName(), user.getLastName(), user.getLangKey(), phoneMatch));
+    }
+
+    /**
+     * The address is the OLD one of the holder's own recent email change: they are told at that address (their
+     * account's current email may be whoever took it over), in the email-change wording.
+     */
+    private static void notifyReservingAccount(ApplicationEventPublisher publisher,
+                                               RateLimitingService rateLimitingService,
+                                               EmailAddressAvailability.Holder holder) {
+        User user = holder.user();
+        if (!rateLimitingService.tryConsume(String.valueOf(user.getId()), NOTICE_LIMIT_KEY, NOTICE_CAPACITY,
+                NOTICE_WINDOW_MINUTES, TimeUnit.MINUTES)) {
+            return;
+        }
+        publisher.publishEvent(new ReservedAddressAttemptEvent(
+            user.getId(), holder.notifyAddress(), user.getFirstName(), user.getLastName(), user.getLangKey()));
     }
 
     private static void notifyRegistrant(ApplicationEventPublisher publisher, RateLimitingService rateLimitingService,

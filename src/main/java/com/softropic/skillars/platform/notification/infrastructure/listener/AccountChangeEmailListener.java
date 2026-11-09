@@ -40,6 +40,12 @@ public class AccountChangeEmailListener {
     @Transactional
     @EventListener
     public void handleAccountChange(AccountChangeEvent event) {
+        // skillars-deferred-172: an email change mails its own notices through the outbox (EmailChangeService:
+        // EMAIL_CHANGED_NOTICE with the undo link, PASSWORD_RESET on undo); its events are for the audit trail.
+        if (event.getAction() == AccountChangeEvent.Action.EMAIL_CHANGED
+                || event.getAction() == AccountChangeEvent.Action.EMAIL_CHANGE_UNDONE) {
+            return;
+        }
         log.info("Sending account change notification email", kv("action", event.getAction()));
         sendNotificationEmail(event);
     }
