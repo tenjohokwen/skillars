@@ -252,7 +252,8 @@ test.describe('L · Managing videos', () => {
       await expect(videos.playerError()).toBeVisible()
       await videos.playerRetry().click()
       await expect(videos.playerVideo()).toBeVisible()
-      expect(cdn.length).toBeGreaterThanOrEqual(3)
+      // Two failed fetches, then the retry's: recorded as the request goes out, which can trail the element.
+      await expect.poll(() => cdn.length).toBeGreaterThanOrEqual(3)
       await expect(videos.playerError()).toHaveCount(0)
     },
   )

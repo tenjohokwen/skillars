@@ -58,6 +58,8 @@ test.describe('X · Look and reach', () => {
               target = (await actor(asRole(account))).page
             }
             await useTheme(target, theme)
+            // Colours transition for 0.2s on load (animations.scss); measure the settled ones.
+            await target.emulateMedia({ reducedMotion: 'reduce' })
             pages.set(persona, target)
           }
           return target
@@ -223,9 +225,18 @@ test.describe('X · Look and reach', () => {
                   : world.player
             target = (await actor(asRole(account))).page
           }
+          // axe measures contrast as painted: without this, a slow runner catches the 0.2s colour transition.
+          await target.emulateMedia({ reducedMotion: 'reduce' })
           pages.set(stop.persona, target)
         }
         await visit(target, suite, stop)
+        // axe tells an icon ligature (<i>light_mode</i>) from text only once the icon font has loaded; before
+        // that, every icon button reads as a label/content mismatch.
+        await target.evaluate(() => document.fonts.ready.then(() => undefined))
+        // The settled screen is what is audited: a q-table draws an unnamed loading bar while it fetches.
+        await expect(target.locator('.q-table__linear-progress')).toHaveCount(0, {
+          timeout: 15_000,
+        })
         await a11y.check(target, { screen: stop.name })
       }
     },

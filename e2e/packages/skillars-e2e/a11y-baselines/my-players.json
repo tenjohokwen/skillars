@@ -8,10 +8,6 @@
     {
       "rule": "meta-viewport",
       "target": "meta[name=\"viewport\"]"
-    },
-    {
-      "rule": "nested-interactive",
-      "target": ".player-item"
     }
   ]
 }
