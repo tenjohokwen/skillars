@@ -1,5 +1,5 @@
 {
-  "name": "Stripe — retrieve payment method (deterministic tier): a Visa ending 4242",
+  "name": "Stripe — retrieve payment method (deterministic tier): a Visa ending 4242, owned by the customer its id encodes (deferred-174 ownership check)",
   "priority": 10,
   "request": {
     "method": "GET",
@@ -12,6 +12,7 @@
       "id": "{{request.pathSegments.[2]}}",
       "object": "payment_method",
       "type": "card",
+      "customer": "{{regexExtract request.pathSegments.[2] '^pm_e2e_(?:declined_)?([A-Za-z0-9]+)__' 'owner' default=''}}{{#if owner}}cus_e2e_{{owner.0}}{{/if}}",
       "livemode": false,
       "card": {
         "brand": "visa",
