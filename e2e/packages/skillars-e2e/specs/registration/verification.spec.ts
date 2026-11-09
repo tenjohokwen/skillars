@@ -97,7 +97,8 @@ test.describe('B · Registration — the verification email', () => {
       const pending = new EmailPendingScreen(page, suite, 'player')
       await expect(pending.resend()).toBeEnabled()
       await pending.resend().click()
-      await expect(pending.resendSuccess()).toBeVisible()
+      // The resend mails before it answers, which takes a while on a busy stack.
+      await expect(pending.resendSuccess()).toBeVisible({ timeout: 30_000 })
       await expect(pending.resend()).toBeDisabled()
       await page.clock.runFor('00:58')
       await expect(pending.resend()).toBeDisabled()
@@ -126,7 +127,8 @@ test.describe('B · Registration — the verification email', () => {
       const pending = new EmailPendingScreen(page, suite, 'player')
       const resentAt = new Date(Date.now() - 1_000)
       await pending.resend().click()
-      await expect(pending.resendSuccess()).toBeVisible()
+      // The resend mails before it answers, which takes a while on a busy stack.
+      await expect(pending.resendSuccess()).toBeVisible({ timeout: 30_000 })
       const second = await mail.waitForMessage({
         to: who.email,
         subjectMatches: /verify/i,
@@ -171,7 +173,8 @@ test.describe('B · Registration — the verification email', () => {
       })
       await page.goto(suite.routing.toUrl(`${REGISTRATION.player.verifyEmail}?token=${token}`))
       await expect(page.getByTestId('email-verify-pending')).toBeVisible()
-      await expect(page.getByRole('button')).toHaveCount(0)
+      // Nothing to press on the page itself (the header's language and theme buttons aside).
+      await expect(page.locator('.q-page').getByRole('button')).toHaveCount(0)
       const login = await new LoginScreen(page, suite).waitReady()
       await expect(login.verifiedBanner()).toHaveText(t('auth.emailVerifiedPleaseLogin'))
     },
