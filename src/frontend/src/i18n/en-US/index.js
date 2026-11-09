@@ -853,6 +853,8 @@ export default {
     infoChanged: 'Your profile information has been updated.',
   },
   common: {
+    pageLoadFailed: 'This page could not be opened. Check your connection and try again.',
+    loadFailed: 'This could not be loaded. Please try again.',
     retry: 'Retry',
     submit: 'Submit',
     cancel: 'Cancel',

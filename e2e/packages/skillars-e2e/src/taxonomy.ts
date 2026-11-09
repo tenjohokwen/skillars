@@ -22,6 +22,16 @@ export const taxonomy = defineTaxonomy({
     '@notifications',
     '@privacy',
     '@admin-console',
+    '@cross-cutting',
   ],
-  trait: ['@stripe-live', '@payment-ui', '@ratelimit', '@tz', '@i18n', '@video-shared'],
+  trait: [
+    '@stripe-live',
+    '@payment-ui',
+    '@ratelimit',
+    '@tz',
+    '@i18n',
+    '@video-shared',
+    '@mobile',
+    '@security',
+  ],
 })

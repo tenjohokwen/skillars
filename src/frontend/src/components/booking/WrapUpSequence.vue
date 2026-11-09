@@ -452,7 +452,7 @@ onMounted(() => {
   width: 100%;
   height: 56px;
   background: var(--accent-primary);
-  color: #fff;
+  color: var(--text-on-accent);
   border-radius: 12px;
   font-size: 18px;
   font-weight: 600;

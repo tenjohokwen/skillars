@@ -1291,7 +1291,7 @@ async function shareSlot(slotWindow) {
   width: 100%;
   min-height: 56px;
   background: var(--accent-primary);
-  color: #fff;
+  color: var(--text-on-accent);
 
   @media (max-width: 768px) {
     position: fixed;

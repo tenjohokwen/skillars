@@ -281,4 +281,18 @@ describe('SessionPackDashboardPage.vue — pack status badges (fix/pack-status-b
     expect(setup.hasPaymentPendingConflict).toBe(true)
     expect(setup.hasInsideNoticeConflict).toBe(true)
   })
+
+  it('a failed reload keeps the packs already shown; the error banner is for packs that never loaded', async () => {
+    const wrapper = await mountPage([BASE])
+    const { useBookingStore } = await import('src/stores/booking.store')
+    const store = useBookingStore()
+    store.packsError = 'booking.packs.loadFailed'
+    await flushPromises()
+    expect(has(wrapper, 'load-error')).toBe(false)
+    expect(has(wrapper, 'pack-status-badge')).toBe(true)
+
+    store.sessionPacks = []
+    await flushPromises()
+    expect(has(wrapper, 'load-error')).toBe(true)
+  })
 })

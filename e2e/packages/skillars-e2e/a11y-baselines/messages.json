@@ -1,0 +1,21 @@
+{
+  "screen": "messages",
+  "accepted": [
+    {
+      "rule": "aria-required-parent",
+      "target": ".logout-item"
+    },
+    {
+      "rule": "color-contrast",
+      "target": ".full-height > div[data-v-bddd5bbf=\"\"]"
+    },
+    {
+      "rule": "color-contrast",
+      "target": ".text-caption"
+    },
+    {
+      "rule": "meta-viewport",
+      "target": "meta[name=\"viewport\"]"
+    }
+  ]
+}

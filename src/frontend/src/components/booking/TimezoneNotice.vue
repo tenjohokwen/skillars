@@ -21,6 +21,7 @@
       round
       icon="close"
       class="timezone-notice__close"
+      :aria-label="t('common.close')"
       @click="authStore.dismissTimezoneNotice()"
     />
   </div>
@@ -61,7 +62,7 @@ onUnmounted(() => {
   justify-content: space-between;
   padding: 10px 16px;
   background: var(--accent-primary);
-  color: #fff;
+  color: var(--text-on-accent);
   font-size: 14px;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
 

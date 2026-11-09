@@ -17,14 +17,11 @@
         />
       </div>
 
-      <q-banner
+      <LoadErrorBanner
         v-if="loadError"
-        class="bg-negative text-white q-mb-md"
-        rounded
-        data-testid="page-load-error"
-      >
-        {{ t('notifications.loadError') }}
-      </q-banner>
+        :message="t('notifications.loadError')"
+        @retry="load"
+      />
 
       <div class="glass-card--static q-pa-sm">
         <div
@@ -74,6 +71,7 @@ import NotificationItem from 'src/components/notification/NotificationItem.vue'
 import { notificationApi } from 'src/api/notification.api'
 import { useNotificationStore } from 'src/stores/notification.store'
 import { safeDeepLink } from 'src/utils/notificationText'
+import LoadErrorBanner from 'src/components/common/LoadErrorBanner.vue'
 
 const PAGE_SIZE = 20
 

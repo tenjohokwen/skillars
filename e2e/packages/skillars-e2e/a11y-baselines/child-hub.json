@@ -1,0 +1,13 @@
+{
+  "screen": "child hub",
+  "accepted": [
+    {
+      "rule": "aria-required-parent",
+      "target": ".logout-item"
+    },
+    {
+      "rule": "meta-viewport",
+      "target": "meta[name=\"viewport\"]"
+    }
+  ]
+}

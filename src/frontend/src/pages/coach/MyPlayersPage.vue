@@ -47,13 +47,17 @@
           class="player-item clickable q-mb-md q-pb-md row items-center justify-between"
           data-testid="roster-player"
           :data-player-id="player.playerId"
-          role="button"
-          tabindex="0"
           @click="goToPlayerDetail(player)"
-          @keyup.enter="goToPlayerDetail(player)"
-          @keyup.space="goToPlayerDetail(player)"
         >
-          <div>
+          <!-- The keyboard target is the name block, not the row: the row also holds the message
+               button, and a control nested inside a role=button is unreachable to assistive tech. -->
+          <div
+            role="button"
+            tabindex="0"
+            data-testid="roster-player-open"
+            @keyup.enter="goToPlayerDetail(player)"
+            @keyup.space="goToPlayerDetail(player)"
+          >
             <div class="text-body1" style="color: var(--text-primary)">
               {{ player.playerName }}
             </div>

@@ -1,6 +1,6 @@
 <template>
   <div v-if="isLoading" class="global-loading-bar">
-    <q-linear-progress indeterminate color="primary" />
+    <q-linear-progress indeterminate color="primary" :aria-label="$t('common.loading')" />
   </div>
 </template>
 

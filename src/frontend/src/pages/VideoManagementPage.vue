@@ -65,6 +65,7 @@
         data-testid="video-upload-progress"
         :data-progress="uploadProgress"
         :value="uploadProgress / 100"
+        :aria-label="t('video.status.UPLOADING')"
         color="primary"
         class="q-mt-sm"
         style="max-width: 400px"

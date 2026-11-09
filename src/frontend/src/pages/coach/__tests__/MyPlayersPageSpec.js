@@ -242,7 +242,7 @@ describe('MyPlayersPage.vue (skillars-12-1 AC8)', () => {
 
   // Review Patch 7: rows were mouse-only (no role, tabindex, or keyboard handler) — a keyboard or
   // screen-reader user had no way to reach the new detail page at all.
-  it('is keyboard-reachable: row has role=button/tabindex and Enter/Space trigger navigation', async () => {
+  it('is keyboard-reachable: the name block has role=button/tabindex and Enter/Space trigger navigation', async () => {
     getCoachRoster.mockResolvedValue({
       players: [PLAYER({ playerId: LARGE_PLAYER_ID, playerName: 'Alex Kane' })],
     })
@@ -250,7 +250,9 @@ describe('MyPlayersPage.vue (skillars-12-1 AC8)', () => {
     await router.push('/coach/players')
     await flushPromises()
     const pushSpy = vi.spyOn(router, 'push')
-    const row = wrapper.find('.player-item')
+    // The name block, not the row: the row holds the message button too (axe nested-interactive).
+    expect(wrapper.find('.player-item').attributes('role')).toBeUndefined()
+    const row = wrapper.find('[data-testid="roster-player-open"]')
 
     expect(row.attributes('role')).toBe('button')
     expect(row.attributes('tabindex')).toBe('0')

@@ -69,7 +69,7 @@ const chipClass = computed(() => statusMap[liveStatus.value]?.cls ?? 'chip--neut
 }
 .chip--primary {
   background-color: var(--accent-primary);
-  color: #fff;
+  color: var(--text-on-accent);
 }
 .chip--error {
   background-color: var(--color-error);

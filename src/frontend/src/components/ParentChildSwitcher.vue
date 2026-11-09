@@ -102,7 +102,7 @@ async function selectPlayer(id) {
   height: 28px;
   border-radius: 50%;
   background: var(--accent-primary);
-  color: #fff;
+  color: var(--text-on-accent);
   display: flex;
   align-items: center;
   justify-content: center;

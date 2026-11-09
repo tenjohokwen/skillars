@@ -1,0 +1,25 @@
+{
+  "screen": "availability",
+  "accepted": [
+    {
+      "rule": "aria-required-parent",
+      "target": ".logout-item"
+    },
+    {
+      "rule": "button-name",
+      "target": "button[data-testid=\"availability-next-week\"]"
+    },
+    {
+      "rule": "button-name",
+      "target": "button[data-testid=\"availability-prev-week\"]"
+    },
+    {
+      "rule": "color-contrast",
+      "target": ".bg-secondary > .q-btn__content.text-center.items-center > .block"
+    },
+    {
+      "rule": "meta-viewport",
+      "target": "meta[name=\"viewport\"]"
+    }
+  ]
+}

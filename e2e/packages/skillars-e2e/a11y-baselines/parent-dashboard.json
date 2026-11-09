@@ -1,0 +1,17 @@
+{
+  "screen": "parent dashboard",
+  "accepted": [
+    {
+      "rule": "aria-required-parent",
+      "target": ".logout-item"
+    },
+    {
+      "rule": "label-content-name-mismatch",
+      "target": ".parent-dashboard__player-link"
+    },
+    {
+      "rule": "meta-viewport",
+      "target": "meta[name=\"viewport\"]"
+    }
+  ]
+}

@@ -5,12 +5,16 @@
       <div class="text-meta q-mb-lg">{{ t('player.dashboard.body') }}</div>
 
       <div class="player-dashboard__grid">
-        <router-link to="/parent/bookings" class="glass-card soft-hover player-dashboard__tile">
+        <router-link
+          to="/parent/bookings"
+          class="glass-card soft-hover player-dashboard__tile"
+          data-testid="upcoming-tile"
+        >
           <q-icon name="event" size="24px" style="color: var(--accent-primary)" />
           <div class="text-card-title q-mt-sm">
             {{ t('player.dashboard.upcomingSessionsTitle') }}
           </div>
-          <div class="text-meta q-mt-xs">
+          <div class="text-meta q-mt-xs" data-testid="tile-value">
             <q-spinner-dots v-if="bookingStore.bookingsLoading" size="18px" />
             <template v-else-if="bookingStore.bookingsError">{{
               t('player.dashboard.tileUnavailable')
@@ -30,7 +34,7 @@
         >
           <q-icon name="account_balance_wallet" size="24px" style="color: var(--accent-primary)" />
           <div class="text-card-title q-mt-sm">{{ t('player.dashboard.creditWalletTitle') }}</div>
-          <div class="text-meta q-mt-xs">
+          <div class="text-meta q-mt-xs" data-testid="tile-value">
             <q-spinner-dots v-if="creditPending" size="18px" />
             <template v-else-if="paymentStore.error.creditBalance">{{
               t('player.dashboard.tileUnavailable')

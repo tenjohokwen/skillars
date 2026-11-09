@@ -865,6 +865,8 @@ export default {
     infoChanged: 'Vos informations personnelles ont été mises à jour.',
   },
   common: {
+    pageLoadFailed: 'Cette page n’a pas pu s’ouvrir. Vérifiez votre connexion et réessayez.',
+    loadFailed: 'Le chargement a échoué. Veuillez réessayer.',
     retry: 'Réessayer',
     submit: 'Soumettre',
     cancel: 'Annuler',

@@ -62,3 +62,6 @@ export function tc(
         : 0
   return forms[index]!
 }
+
+/** The top-level message namespaces (`booking`, `admin`, …): a raw key on screen starts with one of these. */
+export const MESSAGE_NAMESPACES: readonly string[] = Object.keys(enUS)

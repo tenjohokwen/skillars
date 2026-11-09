@@ -182,6 +182,7 @@
             <q-linear-progress
               v-if="isUploading"
               :value="uploadPercent"
+              :aria-label="t('video.status.UPLOADING')"
               class="q-mt-sm"
               color="primary"
             />

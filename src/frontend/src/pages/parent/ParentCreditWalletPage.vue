@@ -4,6 +4,12 @@
       <div class="col-12 col-md-8 col-lg-6">
         <h5 class="q-mt-none">{{ $t('payment.credits.title') }}</h5>
 
+        <LoadErrorBanner
+          v-if="store.error.creditBalance"
+          :retrying="store.loading.creditBalance"
+          @retry="store.fetchCreditBalance()"
+        />
+
         <!-- Balance card -->
         <q-card class="glass-card q-mb-md">
           <q-card-section>
@@ -86,6 +92,7 @@ import { useQuasar } from 'quasar'
 import { usePaymentStore } from 'src/stores/payment.store'
 import { cashOut } from 'src/api/payment.api'
 import PaymentMethodCard from 'src/components/payment/PaymentMethodCard.vue'
+import LoadErrorBanner from 'src/components/common/LoadErrorBanner.vue'
 
 const { t } = useI18n()
 const $q = useQuasar()

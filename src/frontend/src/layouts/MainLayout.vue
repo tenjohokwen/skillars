@@ -32,6 +32,7 @@
           :label="currentLanguageLabel"
           icon="language"
           class="header-btn"
+          data-testid="language-menu-btn"
         >
           <q-list class="dropdown-list">
             <q-item
@@ -41,6 +42,7 @@
               v-close-popup
               @click="changeLanguage(lang.value)"
               class="dropdown-item"
+              :data-testid="`language-option-${lang.value.toLowerCase()}`"
             >
               <q-item-section>
                 <q-item-label>{{ lang.label }}</q-item-label>
@@ -60,6 +62,8 @@
           :icon="darkMode ? 'light_mode' : 'dark_mode'"
           class="header-btn"
           :aria-label="darkMode ? t('theme.toggle') : t('theme.toggle')"
+          data-testid="theme-toggle-btn"
+          :data-theme="darkMode ? 'dark' : 'light'"
           @click="onToggleTheme"
         >
           <q-tooltip>{{ darkMode ? t('theme.light') : t('theme.dark') }}</q-tooltip>

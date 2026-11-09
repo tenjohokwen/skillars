@@ -195,6 +195,19 @@ body,
   color: var(--text-primary) !important;
 }
 
+// Pitchside X-05: Quasar's table wrapper keeps its own white background, so in dark mode the light table text
+// sat on white (the admin console was near-unreadable). The wrapper takes the theme's surface instead.
+.q-table__card,
+.q-table__container {
+  background: transparent !important;
+  color: var(--text-primary) !important;
+}
+
+.q-table__bottom,
+.q-table__bottom .q-table__control {
+  color: var(--text-secondary) !important;
+}
+
 .q-table thead tr {
   background: transparent;
 
@@ -292,4 +305,53 @@ body,
   border-radius: 16px !important;
   font-family: 'Inter', sans-serif;
   backdrop-filter: blur(18px);
+}
+
+// ── Legibility (Pitchside X-05) ─────────────────────────────
+// Quasar's defaults assume light surfaces: captions, uncoloured chips, banners and tab panels painted dark text or
+// a white panel onto the dark theme. They follow the theme's tokens instead.
+.q-item__label--caption {
+  color: var(--text-secondary);
+}
+.q-chip:not(.q-chip--colored) {
+  color: var(--text-primary);
+}
+.q-banner:not([class*='bg-']) {
+  background: var(--surface-glass-strong);
+  color: var(--text-primary);
+}
+.q-tab-panels,
+.q-tab-panel {
+  background: transparent;
+  color: inherit;
+}
+.text-grey,
+.text-grey-5,
+.text-grey-6,
+.text-grey-7 {
+  color: var(--text-muted) !important;
+}
+.text-grey-8 {
+  color: var(--text-secondary) !important;
+}
+.bg-grey,
+.bg-grey-5.text-white,
+.bg-grey-6.text-white,
+.bg-grey-7.text-white {
+  background: #6b6b6b !important;
+}
+
+// The neon accent is a light colour: text on it is dark (--text-on-accent), never white. In the light theme the
+// brand colours Quasar paints with are the darker, accessible accents, so text in them reads on a white surface.
+.bg-primary,
+.bg-primary.text-white,
+.bg-positive,
+.bg-positive.text-white {
+  color: var(--text-on-accent) !important;
+}
+:root[data-theme='light'] {
+  --q-primary: #007a58;
+  --q-positive: #007a58;
+  --q-negative: #d0294a;
+  --q-warning: #a86a00;
 }

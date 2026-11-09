@@ -1,5 +1,8 @@
 export default {
   common: {
+    pageLoadFailed:
+      'Diese Seite konnte nicht geöffnet werden. Prüfe deine Verbindung und versuche es erneut.',
+    loadFailed: 'Das konnte nicht geladen werden. Bitte versuche es erneut.',
     retry: 'Erneut versuchen',
     cancel: 'Abbrechen',
     save: 'Speichern',

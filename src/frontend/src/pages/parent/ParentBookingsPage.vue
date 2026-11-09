@@ -7,9 +7,11 @@
 
     <div class="text-h5 q-mb-md">{{ t('booking.requests.listTitle') }}</div>
 
-    <q-banner v-if="bookingStore.bookingsError" class="bg-negative text-white q-mb-md" rounded>
-      {{ t('booking.requests.bookingsLoadError') }}
-    </q-banner>
+    <LoadErrorBanner
+      v-if="bookingStore.bookingsError"
+      :message="t('booking.requests.bookingsLoadError')"
+      @retry="bookingStore.loadParentBookings()"
+    />
 
     <div v-if="bookingStore.bookingsLoading" class="flex flex-center q-py-xl">
       <q-spinner size="48px" />
@@ -472,6 +474,7 @@
 </template>
 
 <script setup>
+import LoadErrorBanner from 'src/components/common/LoadErrorBanner.vue'
 import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useQuasar } from 'quasar'

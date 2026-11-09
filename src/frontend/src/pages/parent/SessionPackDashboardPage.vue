@@ -6,6 +6,12 @@
       <q-spinner size="40px" />
     </div>
 
+    <!-- Only when nothing loaded: a failed reload after a pause keeps the packs already on screen. -->
+    <LoadErrorBanner
+      v-else-if="bookingStore.packsError && bookingStore.sessionPacks.length === 0"
+      @retry="playerId && bookingStore.loadPlayerPacks(playerId)"
+    />
+
     <template v-else-if="bookingStore.sessionPacks.length === 0">
       <div class="empty-state text-center q-py-xl" data-testid="packs-empty">
         <q-icon name="sports_soccer" size="56px" color="grey-5" class="q-mb-md" />
@@ -213,6 +219,7 @@
 </template>
 
 <script setup>
+import LoadErrorBanner from 'src/components/common/LoadErrorBanner.vue'
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'

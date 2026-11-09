@@ -6,6 +6,17 @@
       <q-spinner size="48px" />
     </div>
 
+    <!-- Only when nothing loaded: a failed refresh after accept/decline keeps the stale list on screen
+         (deferred-31; the store's "list may be stale" toast says so). -->
+    <LoadErrorBanner
+      v-else-if="
+        bookingStore.coachRequestsError &&
+        bookingStore.coachBookingRequests.length === 0 &&
+        bookingStore.coachBatchGroups.length === 0
+      "
+      @retry="bookingStore.loadCoachBookingRequests()"
+    />
+
     <div
       v-else-if="
         bookingStore.coachBookingRequests.length === 0 && bookingStore.coachBatchGroups.length === 0
@@ -159,6 +170,7 @@ import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useQuasar } from 'quasar'
 import { useBookingStore } from 'src/stores/booking.store'
+import LoadErrorBanner from 'src/components/common/LoadErrorBanner.vue'
 
 const { t, locale } = useI18n()
 const $q = useQuasar()
