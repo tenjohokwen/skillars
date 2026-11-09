@@ -13,6 +13,18 @@ import { nextWeekSlot, slotInstant } from './slots.js'
 
 export type AccountKind = 'coach' | 'parent' | 'player'
 
+/**
+ * A WireMock card id owned by the customer a SetupIntent was created for: the stack's SetupIntent stub ends its
+ * client secret with that customer (`…_secret_cus_e2e_<x>`), and its payment-method stub answers
+ * `pm_e2e_[declined_]<x>__<label>` with `customer: cus_e2e_<x>`.
+ */
+export function cardOwnedBy(clientSecret: string, prefix: string, label: string): string {
+  const customer = clientSecret.split('_secret_')[1] ?? ''
+  if (!customer.startsWith('cus_e2e_'))
+    throw new Error(`No e2e customer in client secret ${clientSecret}`)
+  return `${prefix}${customer.slice('cus_e2e_'.length)}__${label}`
+}
+
 export interface Account {
   kind: AccountKind
   email: string
@@ -344,11 +356,20 @@ export class Provisioner {
     account: Pick<Account, 'email' | 'password'>,
     options: { declines?: boolean } = {},
   ): Promise<string> {
-    // pm_e2e_declined_* cards are refused at charge time (stripe-payment-intents-declined.json).
-    const prefix = options.declines ? 'pm_e2e_declined_' : 'pm_e2e_'
-    const paymentMethodId = `${prefix}${this.names.token('pm').replace(/-/g, '_')}`
     const session = await this.login(account)
     try {
+      // As the card form does: a SetupIntent first, which gives the payer a Stripe customer. The card saved
+      // must belong to that customer (deferred-174); the stack's WireMock reads the owner from the card's id.
+      const { clientSecret } = await session.api.json<{ clientSecret: string }>(
+        'POST',
+        '/payment/setup-intent',
+      )
+      const paymentMethodId = cardOwnedBy(
+        clientSecret,
+        // pm_e2e_declined_* cards are refused at charge time (stripe-payment-intents-declined.json).
+        options.declines ? 'pm_e2e_declined_' : 'pm_e2e_',
+        this.names.token('pm').replace(/-/g, '_'),
+      )
       await session.api.post('/payment/save-payment-method', {
         data: { paymentMethodId },
         expectStatus: 204,
