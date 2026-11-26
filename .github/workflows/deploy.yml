@@ -207,7 +207,7 @@ jobs:
       - name: Notify Slack — success
         if: success() && steps.smoke.outputs.result == 'pass'
         continue-on-error: true
-        uses: slackapi/slack-github-action@dcb1066f776dd043e64d0e8ba94ca15cc7e1875d  # v4.0.0
+        uses: slackapi/slack-github-action@0bc3581177d9a0f8d555e07689384b376528e8fa  # v4.1.0
         env:
           SLACK_MESSAGE_TEXT: "✅ *Production deploy succeeded*\nImage: `ghcr.io/${{ github.repository }}:${{ inputs.image_tag }}`\nTriggered by: ${{ github.actor }}"
         with:
@@ -223,7 +223,7 @@ jobs:
         # pre-smoke paths.
         if: always() && (steps.smoke.outputs.result == 'fail' || steps.smoke.outputs.result == 'error' || steps.smoke.outcome == 'failure' || steps.smoke.outcome == 'cancelled')
         continue-on-error: true
-        uses: slackapi/slack-github-action@dcb1066f776dd043e64d0e8ba94ca15cc7e1875d  # v4.0.0
+        uses: slackapi/slack-github-action@0bc3581177d9a0f8d555e07689384b376528e8fa  # v4.1.0
         env:
           SLACK_MESSAGE_TEXT: "❌ *Production deploy FAILED*\nFailed image: `ghcr.io/${{ github.repository }}:${{ inputs.image_tag }}`\nAuto-Revert: ${{ steps.revert.outputs.outcome || 'not attempted' }}\nPrevious image: `${{ steps.pre_deploy.outputs.image }}`\nTriggered by: ${{ github.actor }}"
         with:
@@ -285,7 +285,7 @@ jobs:
         # before smoke). A smoke step that ran and failed/errored is owned by the steps above,
         # so `outcome == 'failure'` must NOT be matched here or every failure double-notifies.
         if: (failure() || cancelled()) && steps.smoke.outcome == 'skipped'
-        uses: slackapi/slack-github-action@dcb1066f776dd043e64d0e8ba94ca15cc7e1875d  # v4.0.0
+        uses: slackapi/slack-github-action@0bc3581177d9a0f8d555e07689384b376528e8fa  # v4.1.0
         env:
           SLACK_MESSAGE_TEXT: "❌ *Production deploy FAILED* (failed before smoke test — no auto-revert attempted)\nImage tag: `${{ inputs.image_tag }}`\nTriggered by: ${{ github.actor }}\nSee: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
         with:
